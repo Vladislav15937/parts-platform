@@ -73,7 +73,8 @@ class RuntimeRoleTest extends PostgresTestBase {
         var journals = java.util.Map.of(
                 "stock_movement", "reason",
                 "audit_log", "table_name",
-                "customer_account_entry", "comment");
+                "customer_account_entry", "comment",
+                "stock_document_event", "kind");
         for (var entry : journals.entrySet()) {
             String journal = entry.getKey();
             String column = entry.getValue();

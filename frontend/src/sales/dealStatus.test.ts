@@ -84,6 +84,21 @@ describe('слово доезжает до экрана', () => {
  * перечисляет состояния подряд, и меньше двух их не бывает.
  */
 describe('копий словаря нет', () => {
+  /**
+   * Словари других перечислений, у которых коды совпали со сделочными.
+   * Прощаются **только названные коды** и только в этом файле: любой другой
+   * сделочный код, заведённый там словом, — уже копия, и ловится он с первой
+   * строки, а не со второй (разбор PR 534: исключение на весь файл пропускало
+   * бы следующую копию молча). Причина обязательна.
+   */
+  const NOT_DEAL_STATUSES: Record<string, { codes: string[]; why: string }> = {
+    'frontend/src/intake/incomes.ts': {
+      codes: ['DRAFT', 'CANCELLED'],
+      why: 'статус документа поступления (stock_document: DRAFT/DONE/CANCELLED, задача 0360),'
+        + ' а не сделки: «Черновик / Выполнен / Отменён» мужского рода, у сделки — женского',
+    },
+  };
+
   const NAMES = new Set([
     ...Object.keys(DEAL_STATUS_NAMES),
     ...Object.keys(DEAL_ITEM_STATUS_NAMES),
@@ -103,15 +118,22 @@ describe('копий словаря нет', () => {
       // Свой каталог glob отдаёт как `./dealStatus.ts`, чужой — как
       // `../screens/…`: сравнивать надо имя файла, а не начало пути.
       .filter(([path]) => !/(^|\/)dealStatus\.(ts|test\.ts)$/.test(path))
-      .filter(([, text]) => text
-        .split('\n')
-        .filter((line) => {
-          const key = /^\s*([A-Z][A-Z0-9_]*)\s*:\s*['"]/.exec(line)
-            ?? /\bcase\s+['"]([A-Z][A-Z0-9_]*)['"]\s*:\s*return\s+['"]/.exec(line);
-          return key !== null && key[1] !== undefined && NAMES.has(key[1]);
-        })
-        .length > 1)
-      .map(([path]) => path.replace('../', 'frontend/src/'))
+      .map(([path, text]) => [path.replace('../', 'frontend/src/'), text] as const)
+      .filter(([path, text]) => {
+        const excused = NOT_DEAL_STATUSES[path];
+        const hits = text
+          .split('\n')
+          .filter((line) => {
+            const key = /^\s*([A-Z][A-Z0-9_]*)\s*:\s*['"]/.exec(line)
+              ?? /\bcase\s+['"]([A-Z][A-Z0-9_]*)['"]\s*:\s*return\s+['"]/.exec(line);
+            return key !== null && key[1] !== undefined && NAMES.has(key[1])
+              && !(excused?.codes.includes(key[1]) ?? false);
+          })
+          .length;
+        // У прощённого файла непрощённый код — копия с первой же строки.
+        return excused ? hits > 0 : hits > 1;
+      })
+      .map(([path]) => path)
       .sort();
 
     expect(

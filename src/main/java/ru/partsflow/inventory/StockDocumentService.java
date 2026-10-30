@@ -27,13 +27,16 @@ public class StockDocumentService {
     private final PartChangeLog partChanges;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final StockNaming naming;
+    private final StockDocumentHistory history;
 
     public StockDocumentService(StockDocumentRepository documents,
                                StockLedger ledger,
                                StockReservationRepository stock,
                                PartChangeLog partChanges,
                                org.springframework.jdbc.core.JdbcTemplate jdbc,
-                                StockNaming naming) {
+                                StockNaming naming,
+                                StockDocumentHistory history) {
+        this.history = history;
         this.documents = documents;
         this.ledger = ledger;
         this.stock = stock;
@@ -181,8 +184,14 @@ public class StockDocumentService {
      */
     @Transactional
     public StockDocument complete(Long documentId) {
-        StockDocument document = require(documentId);
+        // Под блокировкой строки и с проверкой состояния ДО движений (задача
+        // 0360): «Провести документ» на экране нажимают дважды, и второе
+        // нажатие без блокировки написало бы приход второй раз — проверка
+        // черновика стояла после записи движений.
+        StockDocument document = documents.findByIdForUpdate(documentId).orElseThrow(
+                () -> NotFound.STOCK_DOCUMENT.error(documentId));
         Instant now = Instant.now();
+        document.complete(now);
 
         for (StockDocumentLine line : document.getLines()) {
             requireAvailable(document, line);
@@ -194,16 +203,171 @@ public class StockDocumentService {
                 .map(StockDocumentLine::getPartId)
                 .toList());
 
-        document.complete(now);
+        if (document.getDocType() == StockDocument.DocumentType.INTAKE) {
+            history.record(document.getId(), StockDocumentHistory.Kind.POSTED);
+        }
         return documents.saveAndFlush(document);
     }
 
-    /** Отменяет черновик. Проведённый документ отмене не подлежит. */
+    /**
+     * Отменяет черновик. Выполненный сначала возвращают в черновик
+     * «Отменить проводку» ({@link #unpost}). Повтор — не ошибка и не вторая
+     * запись в истории.
+     */
     @Transactional
     public StockDocument cancel(Long documentId) {
-        StockDocument document = require(documentId);
+        StockDocument document = documents.findByIdForUpdate(documentId).orElseThrow(
+                () -> NotFound.STOCK_DOCUMENT.error(documentId));
+        if (document.getStatus() == StockDocument.DocumentStatus.CANCELLED) {
+            return document;
+        }
         document.cancel();
+        if (document.getDocType() == StockDocument.DocumentType.INTAKE) {
+            history.record(document.getId(), StockDocumentHistory.Kind.CANCELLED);
+        }
         return documents.saveAndFlush(document);
+    }
+
+    /**
+     * «Провести документ» с экрана поступления (задача 0360): повтор нажатия
+     * отдаёт уже выполненный документ, а не отказ — человек нажал второй раз
+     * потому, что первое не показало результата.
+     */
+    @Transactional
+    public StockDocument post(Long documentId) {
+        StockDocument document = documents.findByIdForUpdate(documentId).orElseThrow(
+                () -> NotFound.STOCK_DOCUMENT.error(documentId));
+        if (document.getStatus() == StockDocument.DocumentStatus.DONE && !document.isDeleted()) {
+            return document;
+        }
+        return complete(documentId);
+    }
+
+    /**
+     * Добавляет позицию в черновик поступления и пишет «Добавлена позиция N»
+     * (задача 0360). Документ — под блокировкой: проведение, идущее в ту же
+     * минуту, либо увидит строку целиком, либо откажет ей словами.
+     */
+    @Transactional
+    public StockDocument addLine(Long documentId, Long partId, BigDecimal qty, Long cellId) {
+        StockDocument document = documents.findByIdForUpdate(documentId).orElseThrow(
+                () -> NotFound.STOCK_DOCUMENT.error(documentId));
+        document.addLine(partId, qty, cellId);
+        StockDocument saved = save(document);
+        history.lineAdded(documentId, partId);
+        return saved;
+    }
+
+    /**
+     * Поступление, в которое можно добавить позицию: существует, это поступление
+     * и оно черновик. Проверяется до заведения карточки — иначе отказ пришёл
+     * бы после неё, и слова назвали бы не ту причину.
+     */
+    @Transactional(readOnly = true)
+    public StockDocument findDraftIntake(Long documentId) {
+        StockDocument document = requireIntake(documentId);
+        if (!document.isDraft()) {
+            throw new IllegalStateException(document.getStatus() == StockDocument.DocumentStatus.DONE
+                    ? "Поступление уже выполнено: позиции добавляют в черновик — сначала «Отменить проводку»"
+                    : "Поступление отменено: позиции в него не добавляют");
+        }
+        return document;
+    }
+
+    /** Поступление по номеру строки; другой вид документа — «не найдено», а не чужой документ. */
+    @Transactional(readOnly = true)
+    public StockDocument requireIntake(Long documentId) {
+        StockDocument document = documents.findById(documentId).orElseThrow(
+                () -> NotFound.INCOME.error(documentId));
+        if (document.getDocType() != StockDocument.DocumentType.INTAKE) {
+            throw NotFound.INCOME.error(documentId);
+        }
+        return document;
+    }
+
+    /** Стоит ли позиция строкой в документе — повтор «Добавить» узнаётся по ней. */
+    @Transactional(readOnly = true)
+    public boolean hasLine(Long documentId, Long partId) {
+        Integer found = jdbc.queryForObject("""
+                SELECT count(*) FROM stock_document_line WHERE document_id = ? AND part_id = ?""",
+                Integer.class, documentId, partId);
+        return found != null && found > 0;
+    }
+
+    /**
+     * «Отменить проводку» (задача 0360): выполненное поступление снова
+     * черновик, приход снят встречным движением {@code INTAKE} со ссылкой
+     * {@link StockMovement#DOCUMENT_UNPOSTED}. Исходные движения остаются
+     * в журнале — он неизменяем.
+     *
+     * <p><b>Отмена целиком или никак.</b> Снимается только свободное, и это
+     * одна инструкция ({@link StockLedger#reverse}); снялось меньше строки
+     * документа — значит деталь продана, отложена, перевезена или списана,
+     * и вся операция откатывается отказом словами. Умолчание задачи
+     * (раздел «Решение сборщика»): проданную позицию не снимаем и в минус
+     * не уводим — «Позиция уже продана — отмена проводки невозможна».
+     * Ориентир в этом месте не видели.
+     *
+     * <p>Повтор нажатия: документ уже черновик и последнее в его истории —
+     * «Проводка отменена» — отдаётся как есть, а не отказом.
+     */
+    @Transactional
+    public StockDocument unpost(Long documentId) {
+        StockDocument document = documents.findByIdForUpdate(documentId).orElseThrow(
+                () -> NotFound.STOCK_DOCUMENT.error(documentId));
+        if (document.getDocType() != StockDocument.DocumentType.INTAKE) {
+            throw new IllegalStateException(
+                    "Отменить проводку можно у поступления; перемещение и списание удаляют");
+        }
+        if (document.isDraft() && history.lastIs(documentId, StockDocumentHistory.Kind.UNPOSTED)) {
+            return document;
+        }
+        document.unpost();
+        for (StockDocumentLine line : document.getLines()) {
+            BigDecimal taken = ledger.reverse(line.getPartId(), MovementType.INTAKE, line.getQty(),
+                    document.getWarehouseId(), null, document.getId(),
+                    StockMovement.DOCUMENT_UNPOSTED, "Отмена проводки");
+            if (taken.compareTo(line.getQty()) < 0) {
+                throw new IllegalStateException(unpostRefusal(document, line));
+            }
+        }
+        history.record(documentId, StockDocumentHistory.Kind.UNPOSTED);
+        return documents.saveAndFlush(document);
+    }
+
+    /**
+     * Почему проводку не отменить — словами и с названием позиции: в документе
+     * их десятки, и человек должен понять, на какой споткнулся.
+     */
+    private String unpostRefusal(StockDocument document, StockDocumentLine line) {
+        String part = naming.part(line.getPartId());
+        // «Продана» — только если продана после этой проводки и не вернулась:
+        // продажа, случившаяся до неё (продали, вернули, приняли заново), к нехватке
+        // отношения не имеет, и такой отказ назвал бы не ту причину. Граница —
+        // номер движения прихода этой проводки, а не время: время документа
+        // ставят часы приложения, время движений — часы базы.
+        BigDecimal soldSince = jdbc.queryForObject("""
+                SELECT coalesce(sum(m.qty_delta), 0) FROM stock_movement m
+                 WHERE m.part_id = ? AND m.movement_type IN ('SALE', 'RETURN')
+                   AND m.id > (SELECT coalesce(max(i.id), 0) FROM stock_movement i
+                                WHERE i.part_id = m.part_id AND i.document_id = ?
+                                  AND i.movement_type = 'INTAKE' AND i.qty_delta > 0)""",
+                BigDecimal.class, line.getPartId(), document.getId());
+        if (soldSince != null && soldSince.signum() < 0) {
+            return part + ": позиция уже продана — отмена проводки невозможна";
+        }
+        BigDecimal reserved = jdbc.query("""
+                        SELECT qty_reserved FROM part_stock WHERE part_id = ? AND warehouse_id = ?""",
+                (rs, i) -> rs.getBigDecimal(1), line.getPartId(), document.getWarehouseId())
+                .stream().findFirst().orElse(BigDecimal.ZERO);
+        if (reserved.signum() > 0) {
+            return part + ": позиция отложена покупателю — отмена проводки невозможна, "
+                    + "сначала снимите резерв";
+        }
+        String warehouse = naming.warehouse(document.getWarehouseId());
+        return part + ": позиции нет на складе " + warehouse
+                + " в том количестве, что пришло, — её перевезли или списали; "
+                + "отмена проводки невозможна";
     }
 
     /**
@@ -369,8 +533,4 @@ public class StockDocumentService {
         return movement;
     }
 
-    private StockDocument require(Long documentId) {
-        return documents.findById(documentId).orElseThrow(
-                () -> NotFound.STOCK_DOCUMENT.error(documentId));
-    }
 }

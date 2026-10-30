@@ -60,6 +60,7 @@ public class IntakeService {
     private final ru.partsflow.inventory.CatalogService catalog;
     private final ru.partsflow.catalog.BazonVehicles bazonVehicles;
     private final ru.partsflow.inventory.PartIdentity identity;
+    private final ru.partsflow.inventory.StockDocumentHistory history;
 
     public IntakeService(SupplyRepository supplies,
                          DonorRepository donors,
@@ -75,7 +76,9 @@ public class IntakeService {
                          JdbcTemplate jdbc,
                          ru.partsflow.inventory.CatalogService catalog,
                          ru.partsflow.catalog.BazonVehicles bazonVehicles,
-                         ru.partsflow.inventory.PartIdentity identity) {
+                         ru.partsflow.inventory.PartIdentity identity,
+                         ru.partsflow.inventory.StockDocumentHistory history) {
+        this.history = history;
         this.bazonVehicles = bazonVehicles;
         this.identity = identity;
         this.catalog = catalog;
@@ -105,11 +108,23 @@ public class IntakeService {
     @Transactional
     public Supply registerSupply(Supply.SupplyKind kind, String number,
                                  String supplierName, Long authorId) {
+        return registerSupply(kind, number, supplierName, null, authorId);
+    }
+
+    /**
+     * То же с описанием: окно «Новая поставка» документа поступления (задача
+     * 0360) спрашивает «Название» и «Описание». Описание пишется только новой
+     * поставке — у найденной оно своё, и повторное заведение его не трогает.
+     */
+    @Transactional
+    public Supply registerSupply(Supply.SupplyKind kind, String number,
+                                 String supplierName, String note, Long authorId) {
         Supply.SupplyKind actualKind = kind == null ? Supply.SupplyKind.CONTAINER : kind;
         return supplies.findByKindAndNumber(actualKind, number.strip())
                 .orElseGet(() -> {
                     Supply supply = new Supply(actualKind, number);
                     supply.setSupplierName(supplierName);
+                    supply.setNote(blankToNull(note));
                     supply.setCreatedBy(authorId);
                     return supplies.saveAndFlush(supply);
                 });
@@ -258,6 +273,13 @@ public class IntakeService {
         }
 
         StockDocument saved = documents.save(document);
+        // История документа (задача 0360): партия с телефона — то же
+        // поступление, и в списке «Поступления» её лента обязана читаться так же,
+        // как у набранного на компьютере: создано, позиции, проведено.
+        history.record(saved.getId(), ru.partsflow.inventory.StockDocumentHistory.Kind.CREATED);
+        for (Part part : created) {
+            history.lineAdded(saved.getId(), part.getId());
+        }
         StockDocument completed = documents.complete(saved.getId());
 
         // Деталь легла на склад — предзаказы под неё становятся обычным
@@ -270,6 +292,141 @@ public class IntakeService {
         // принятая заведённая уже была объявлена, когда её заводили.
         fresh.forEach(this::publishCreated);
         return new Receipt(completed, created);
+    }
+
+    // ---------- документ поступления с компьютера (задача 0360) ----------
+
+    /**
+     * «Создать поступление»: черновик с поставкой, складом и комментарием,
+     * без позиций и без остатка (решение владельца 19.10.2026 «Всё как
+     * у bazon»; позиции добавляются только после создания).
+     *
+     * <p>Склад обязателен: приход некуда положить, а подставлять склад система
+     * не умеет (frontend/CLAUDE.md, «Склад не подставляется нигде»). Поставка —
+     * нет, у ориентира «- Не выбрана -» законно.
+     *
+     * <p>Повтор по ключу формы отдаёт тот же черновик: двойное нажатие «Создать
+     * поступление» не заводит два документа. Одновременный повтор отбивает
+     * {@code stock_document_client_request_uk}, ответ даёт контроллер
+     * ({@link #draftAfterConflict}).
+     */
+    @Transactional
+    public StockDocument createDraft(Long warehouseId, Long supplyId, String note,
+                                     Long authorId, String requestId) {
+        String key = requestId == null || requestId.isBlank() ? null : requestId.strip();
+        if (key != null) {
+            StockDocument already = documents.findByClientRequestId(key).orElse(null);
+            if (already != null) {
+                return already;
+            }
+        }
+        if (warehouseId == null) {
+            throw new IllegalArgumentException("Выберите склад оприходования");
+        }
+        requireWarehouse(warehouseId);
+        if (supplyId != null) {
+            requireSupply(supplyId);
+        }
+        StockDocument draft = StockDocument.intake(warehouseId, supplyId);
+        draft.setCreatedBy(authorId);
+        draft.setNote(blankToNull(note));
+        draft.setClientRequestId(key);
+        StockDocument saved = documents.save(draft);
+        history.record(saved.getId(), ru.partsflow.inventory.StockDocumentHistory.Kind.CREATED);
+        return saved;
+    }
+
+    /** Черновик по ключу формы — ответ на одновременный повтор «Создать поступление». */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public StockDocument draftAfterConflict(String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            return null;
+        }
+        return documents.findByClientRequestId(requestId.strip()).orElse(null);
+    }
+
+    /**
+     * «+ Добавить» в черновике: карточка заводится сразу — номер, цена, заметка
+     * есть, остатка нет (статус «черновик», плашка «Товар отсутствует»), —
+     * и встаёт строкой документа. Остаток появится при проведении.
+     *
+     * <p>Тот же {@code buildPart}, что у приёмки с телефона: наименование
+     * собирается одной формулой, второго способа заводить позицию нет.
+     *
+     * <p>Повтор по ключу формы отдаёт ту же позицию, если она в этом документе;
+     * одновременный отбивает {@code part_client_request_uk}, ответ даёт
+     * контроллер ({@link #draftLineAfterConflict}).
+     */
+    @Transactional
+    public Part addToDraft(Long documentId, ItemRequest item, Long donorId, Long authorId,
+                           String requestId) {
+        String key = requestId == null || requestId.isBlank() ? null : requestId.strip();
+        if (key != null) {
+            Part already = parts.findByClientRequestId(key).orElse(null);
+            if (already != null) {
+                return lineOfOrRefuse(documentId, already);
+            }
+        }
+        if (item.partId() != null) {
+            throw new IllegalArgumentException(
+                    "Приход на заведённую позицию в черновик пока не добавляется — заведите новую");
+        }
+        if (item.rawName() == null || item.rawName().isBlank()) {
+            throw new IllegalArgumentException("Не указано наименование");
+        }
+        if (item.quantity() == null || item.quantity().signum() <= 0) {
+            throw new IllegalArgumentException("Количество должно быть больше нуля");
+        }
+        if (item.price() != null && item.price().signum() < 0) {
+            throw new IllegalArgumentException("Цена не может быть отрицательной");
+        }
+        if (item.costPrice() != null && item.costPrice().signum() < 0) {
+            throw new IllegalArgumentException("Закупочная цена не может быть отрицательной");
+        }
+        String tooLong = ru.partsflow.catalog.OemNumbers.primaryTooLong(item.oemNumber());
+        if (tooLong != null) {
+            throw new IllegalArgumentException(tooLong);
+        }
+        checkChosenVehicles(List.of(item));
+        StockDocument document = documents.findDraftIntake(documentId);
+        Donor donor = donorId == null ? null : requireDonor(donorId);
+
+        PartName partName = partNames.resolve(item.rawName(), authorId);
+        Part part = buildPart(item, partName,
+                withChosenVehicle(vehicles.resolve(donorId), item.bazonVehicle()),
+                donor, document.getSupplyId(), authorId,
+                item.condition() == null ? PartCondition.USED : item.condition());
+        part.setClientRequestId(key);
+        Part saved = parts.saveAndFlush(part);
+        identity.setBazonVehicle(saved.getId(), item.bazonVehicle());
+        fitFromDonor(saved, donor, authorId);
+        primaryOem(saved.getId(), item.oemNumber(), item.crossNumbers());
+        documents.addLine(documentId, saved.getId(), item.quantity(), item.cellId());
+        publishCreated(saved);
+        return saved;
+    }
+
+    /** Позиция по ключу формы — ответ на одновременный повтор «Добавить». */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                   readOnly = true)
+    public Part draftLineAfterConflict(Long documentId, String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            return null;
+        }
+        Part first = parts.findByClientRequestId(requestId.strip()).orElse(null);
+        if (first == null || !documents.hasLine(documentId, first.getId())) {
+            return null;
+        }
+        return first;
+    }
+
+    private Part lineOfOrRefuse(Long documentId, Part already) {
+        if (!documents.hasLine(documentId, already.getId())) {
+            throw new IllegalStateException(
+                    "Этот запрос уже заведён в другом документе — обновите страницу и повторите");
+        }
+        return already;
     }
 
     /**

@@ -250,6 +250,23 @@ public class StockMovement {
     public static StockMovement reversal(Long partId, MovementType type, BigDecimal quantity,
                                          Long fromWarehouseId, Long toWarehouseId,
                                          Long documentId) {
+        return reversal(partId, type, quantity, fromWarehouseId, toWarehouseId, documentId,
+                DOCUMENT_DELETED, "Удаление документа");
+    }
+
+    /**
+     * Ссылка встречного движения «Отменить проводку» (задача 0360): документ
+     * не удалён, а снова черновик, и при следующем проведении напишет приход
+     * заново. Своя ссылка, а не {@link #DOCUMENT_DELETED}: итог удаления
+     * суммирует встречные движения документа по ссылке, и отменённая раньше
+     * проводка посчиталась бы снятым при удалении.
+     */
+    public static final String DOCUMENT_UNPOSTED = "DOCUMENT_UNPOSTED";
+
+    /** Встречное движение с заданной ссылкой: удаление документа или отмена проводки. */
+    public static StockMovement reversal(Long partId, MovementType type, BigDecimal quantity,
+                                         Long fromWarehouseId, Long toWarehouseId,
+                                         Long documentId, String refType, String reason) {
         BigDecimal delta = switch (type) {
             case INTAKE -> quantity.abs().negate();
             case WRITE_OFF, MOVE -> quantity.abs();
@@ -260,15 +277,15 @@ public class StockMovement {
         movement.fromWarehouseId = fromWarehouseId;
         movement.toWarehouseId = toWarehouseId;
         movement.documentId = documentId;
-        movement.refType = DOCUMENT_DELETED;
+        movement.refType = refType;
         movement.refId = documentId;
-        movement.reason = "Удаление документа";
+        movement.reason = reason;
         return movement;
     }
 
-    /** Встречное движение удаления документа, а не обычное. */
+    /** Встречное движение — удаления документа или отмены проводки, а не обычное. */
     public boolean isReversal() {
-        return DOCUMENT_DELETED.equals(refType);
+        return DOCUMENT_DELETED.equals(refType) || DOCUMENT_UNPOSTED.equals(refType);
     }
 
     /** Перестановка на полку того же склада — движение без остатка. */

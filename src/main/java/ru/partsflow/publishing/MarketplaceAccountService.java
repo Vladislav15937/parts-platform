@@ -1049,9 +1049,9 @@ public class MarketplaceAccountService {
                        GROUP BY ps.part_id
                   ) s ON s.part_id = p.id
                   LEFT JOIN donor d ON d.id = p.donor_id
-                  LEFT JOIN supply in_transit
-                         ON in_transit.id = p.supply_id
-                        AND in_transit.status IN ('EXPECTED', 'IN_TRANSIT')
+                  -- Тем же текстом, что генератор: позиция непроведённого
+                  -- поступления в пути не бывает (задача 0360).
+                  ${inTransitJoin}
                  WHERE p.is_published
                    -- Тем же условием, что и генератор: у каждой линии товара
                    -- свой прайс, и колесо в прайсе запчастей — чужая категория,
@@ -1087,6 +1087,8 @@ public class MarketplaceAccountService {
                 .replace("${statuses}", inTransit
                         ? "('IN_STOCK', 'SOLD', 'DRAFT')"
                         : "('IN_STOCK', 'SOLD')")
+                .replace("${inTransitJoin}",
+                        ru.partsflow.publishing.drom.DromPriceGenerator.IN_TRANSIT_JOIN)
                 .replace("${preordered}",
                         ru.partsflow.publishing.drom.DromPriceGenerator.PREORDERED)
                 .replace("${brandFilter}",

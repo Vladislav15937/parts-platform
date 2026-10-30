@@ -1,0 +1,775 @@
+package ru.partsflow.intake;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpSession;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.transaction.support.TransactionTemplate;
+import ru.partsflow.inventory.StockLedger;
+import ru.partsflow.inventory.StockMovement;
+import ru.partsflow.platform.tenant.TenantContext;
+import ru.partsflow.support.PostgresTestBase;
+
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.function.Supplier;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * Документ поступления с черновиком (задача 0360, решение владельца 19.10.2026
+ * «Всё как у bazon»): «Создать поступление» → позиции без остатка → «Провести
+ * документ» → «Отменить проводку» → «Отменить поступление»; список по вкладкам
+ * и история документа.
+ *
+ * <p>Через HTTP: ответы — record'ы, право стоит на путях, и всё это видно
+ * только снаружи.
+ */
+@SpringBootTest(properties = "spring.jpa.hibernate.ddl-auto=none")
+@AutoConfigureMockMvc
+class IncomeDocumentTest extends PostgresTestBase {
+
+    private static final String TENANT = "t_000360";
+
+    @Autowired
+    private MockMvc mvc;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private StockLedger ledger;
+
+    @Autowired
+    private ObjectMapper json;
+
+    private Long warehouse;
+    private MockHttpSession owner;
+
+    @BeforeAll
+    static void migrate() {
+        provisionTenants(TENANT);
+    }
+
+    @BeforeEach
+    void fixtures() throws Exception {
+        jdbc.update("DELETE FROM public.tenant_registry WHERE tenant_id = 360");
+        jdbc.update("""
+                INSERT INTO public.tenant_registry (tenant_id, schema_name, company_name, code)
+                VALUES (360, ?, 'Поступления', 'incomes')""", TENANT);
+        inTenant(() -> {
+            member("vladelec", "Владелец Принимающий", "OWNER");
+            member("prosmotr", "Просмотр", "VIEWER");
+            member("prodavec", "Продавец Поступлений", "SELLER");
+            member("menedzher", "Менеджер Поступлений", "MANAGER");
+            Long branch = jdbc.queryForObject(
+                    "INSERT INTO branch (name) VALUES ('Филиал') RETURNING id", Long.class);
+            warehouse = jdbc.queryForObject(
+                    "INSERT INTO warehouse (branch_id, name) VALUES (?, 'Ткацкая') RETURNING id",
+                    Long.class, branch);
+            return null;
+        });
+        owner = login("vladelec");
+    }
+
+    @Test
+    @DisplayName("Черновик: позиции заведены с номером, но остатка нет; проведение кладёт на склад, отмена проводки снимает")
+    void draftPostUnpostCancel() throws Exception {
+        long supply = supply("Иванов | Двери");
+        JsonNode draft = create(supply, "Иванов | Двери");
+        long doc = draft.path("id").asLong();
+        assertThat(draft.path("status").asText()).isEqualTo("DRAFT");
+        assertThat(draft.path("supply").asText()).isEqualTo("Поставка №Иванов | Двери");
+        assertThat(draft.path("warehouse").asText()).isEqualTo("Ткацкая");
+
+        addItem(doc, "дверь передняя левая", "0", "Снимаем только обшивку");
+        JsonNode two = addItem(doc, "дверь задняя правая", "1500", null);
+        JsonNode lines = two.path("lines");
+        assertThat(lines).hasSize(2);
+        long first = lines.get(0).path("partId").asLong();
+        long second = lines.get(1).path("partId").asLong();
+        assertThat(lines.get(0).path("number").asLong()).as("у позиции черновика есть номер").isPositive();
+
+        // Критерий 6: до «Провести документ» остатка нет — это и есть черновик.
+        assertThat(onHand(first)).as("черновик двинул остаток").isEqualByComparingTo("0");
+        assertThat(onHand(second)).isEqualByComparingTo("0");
+        assertThat(partStatus(first)).isEqualTo("DRAFT");
+        assertThat(movements(first)).as("черновик написал движение").isEmpty();
+        assertThat(catalogFinds("дверь передняя", false)).as("в списке склада её нет").isFalse();
+        assertThat(catalogFinds("дверь передняя", true))
+                .as("с «Отображать отсутствующие» она есть").isTrue();
+
+        JsonNode posted = act(doc, "post", status().isOk());
+        assertThat(posted.path("status").asText()).isEqualTo("DONE");
+        assertThat(posted.path("completedAt").isNull()).isFalse();
+        assertThat(stock(first)).as("проведение не положило на склад поступления").isEqualByComparingTo("1");
+        assertThat(stock(second)).isEqualByComparingTo("1");
+        assertThat(partStatus(first)).isEqualTo("IN_STOCK");
+        assertThat(texts(posted)).containsExactly("Создано поступление",
+                "Добавлена позиция " + lines.get(0).path("number").asLong(),
+                "Добавлена позиция " + lines.get(1).path("number").asLong(),
+                "Поступление проведено");
+        assertThat(posted.path("history").get(0).path("author").asText())
+                .startsWith("Владелец Принимающий");
+
+        JsonNode lane = history(first).path("movements").get(0);
+        assertThat(lane.path("document").asText()).isEqualTo("Поступление №" + posted.path("number").asLong());
+        assertThat(lane.path("status").asText()).isEqualTo("Выполнен");
+
+        // Повтор «Провести документ» — не второй приход.
+        act(doc, "post", status().isOk());
+        assertThat(stock(first)).as("повтор проведения положил второй раз").isEqualByComparingTo("1");
+
+        JsonNode unposted = act(doc, "unpost", status().isOk());
+        assertThat(unposted.path("status").asText()).isEqualTo("DRAFT");
+        assertThat(stock(first)).as("отмена проводки не сняла остаток").isEqualByComparingTo("0");
+        assertThat(stock(second)).isEqualByComparingTo("0");
+        assertThat(partStatus(first)).isEqualTo("DRAFT");
+        assertThat(movements(first)).as("исходное движение остаётся, встречное — рядом")
+                .containsExactly("INTAKE 1.000 null", "INTAKE -1.000 DOCUMENT_UNPOSTED");
+        assertThat(texts(unposted)).last().isEqualTo("Проводка отменена");
+        assertThat(discrepancies()).as("остаток и журнал разошлись").isZero();
+
+        // Повтор «Отменить проводку» — тот же черновик, а не отказ и не второе снятие.
+        act(doc, "unpost", status().isOk());
+        assertThat(movements(first)).hasSize(2);
+
+        JsonNode cancelled = act(doc, "cancel", status().isOk());
+        assertThat(cancelled.path("status").asText()).isEqualTo("CANCELLED");
+        assertThat(texts(cancelled)).last().isEqualTo("Отменено");
+        JsonNode tab = list("cancelled");
+        assertThat(tab.path("rows").findValuesAsText("number"))
+                .contains(String.valueOf(cancelled.path("number").asLong()));
+    }
+
+    @Test
+    @DisplayName("Повторное проведение после отмены проводки кладёт товар снова")
+    void repostAfterUnpost() throws Exception {
+        long doc = create(null, null).path("id").asLong();
+        long part = addItem(doc, "капот", "5000", null).path("lines").get(0).path("partId").asLong();
+        act(doc, "post", status().isOk());
+        act(doc, "unpost", status().isOk());
+        act(doc, "post", status().isOk());
+        assertThat(stock(part)).isEqualByComparingTo("1");
+        assertThat(discrepancies()).isZero();
+    }
+
+    @Test
+    @DisplayName("Проданную позицию проводка не теряет: отказ словами, остаток и документ не тронуты")
+    void soldRefusesUnpost() throws Exception {
+        long doc = create(null, null).path("id").asLong();
+        long part = addItem(doc, "фара левая", "8000", null).path("lines").get(0).path("partId").asLong();
+        act(doc, "post", status().isOk());
+        inTenant(() -> ledger.record(StockMovement.sale(part, BigDecimal.ONE, warehouse, null)));
+
+        JsonNode refused = act(doc, "unpost", status().isConflict());
+        assertThat(refused.path("message").asText())
+                .contains("фара левая")
+                .contains("позиция уже продана — отмена проводки невозможна");
+        assertThat(docStatus(doc)).isEqualTo("DONE");
+        assertThat(movements(part)).as("отказ оставил встречное движение")
+                .containsExactly("INTAKE 1.000 null", "SALE -1.000 DEAL");
+        assertThat(discrepancies()).isZero();
+    }
+
+    @Test
+    @DisplayName("Выполненный документ сразу не отменяют — отказ называет «Отменить проводку»")
+    void doneIsNotCancelledDirectly() throws Exception {
+        long doc = create(null, null).path("id").asLong();
+        addItem(doc, "зеркало", "900", null);
+        act(doc, "post", status().isOk());
+        JsonNode refused = act(doc, "cancel", status().isConflict());
+        assertThat(refused.path("message").asText()).contains("Выполненный").contains("Отменить проводку");
+        assertThat(docStatus(doc)).isEqualTo("DONE");
+    }
+
+    @Test
+    @DisplayName("Без склада поступление не создаётся — словами; двойное «Создать» даёт один черновик")
+    void createNeedsWarehouseAndIsIdempotent() throws Exception {
+        MvcResult noWarehouse = mvc.perform(post("/api/intake/incomes").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"requestId\":\"" + UUID.randomUUID() + "\"}"))
+                .andExpect(status().isBadRequest()).andReturn();
+        assertThat(body(noWarehouse).path("message").asText()).contains("Выберите склад оприходования");
+
+        long before = list("drafts").path("counts").path("drafts").asLong();
+        String key = UUID.randomUUID().toString();
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        CyclicBarrier start = new CyclicBarrier(4);
+        List<Future<Integer>> answers = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            answers.add(pool.submit(() -> {
+                start.await();
+                return mvc.perform(post("/api/intake/incomes").with(csrf()).session(owner)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"warehouseId\":%d,\"requestId\":\"%s\"}"
+                                        .formatted(warehouse, key)))
+                        .andReturn().getResponse().getStatus();
+            }));
+        }
+        List<Integer> codes = new ArrayList<>();
+        for (Future<Integer> answer : answers) {
+            codes.add(answer.get());
+        }
+        pool.shutdown();
+        assertThat(codes).as("одновременный повтор получил отказ").containsOnly(201);
+        assertThat(list("drafts").path("counts").path("drafts").asLong())
+                .as("двойное «Создать поступление» завело два черновика").isEqualTo(before + 1);
+    }
+
+    @Test
+    @DisplayName("Партия с телефона по-прежнему проводится сразу и пишет ту же историю")
+    void phoneBatchIsPostedAtOnce() throws Exception {
+        String key = UUID.randomUUID().toString();
+        String payload = """
+                {"warehouseId":%d,"requestId":"%s","items":[{"rawName":"стартер","price":3000}]}"""
+                .formatted(warehouse, key);
+        JsonNode first = body(mvc.perform(post("/api/intake/receipts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(status().isCreated()).andReturn());
+        JsonNode again = body(mvc.perform(post("/api/intake/receipts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(status().isCreated()).andReturn());
+        long doc = first.path("documentId").asLong();
+        assertThat(again.path("documentId").asLong()).isEqualTo(doc);
+        long part = first.path("parts").get(0).path("id").asLong();
+        assertThat(stock(part)).isEqualByComparingTo("1");
+
+        JsonNode income = body(mvc.perform(get("/api/intake/incomes/" + doc).session(owner))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(income.path("status").asText()).isEqualTo("DONE");
+        assertThat(texts(income)).containsExactly("Создано поступление",
+                "Добавлена позиция " + income.path("lines").get(0).path("number").asLong(),
+                "Поступление проведено");
+    }
+
+    @Test
+    @DisplayName("Без права «Принимать товар» поступление не заводят")
+    void sellerCannotWrite() throws Exception {
+        MockHttpSession seller = login("prosmotr");
+        mvc.perform(post("/api/intake/incomes").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d}".formatted(warehouse)))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Решение владельца 30.10.2026 («закрыть это в 0360»): позиция черновика поступления,
+     * приписанная к поставке, которая ещё не приехала, в прайс Дрома «в пути» не уходит —
+     * ни до «Провести документ», ни после «Отменить проводку». Ожидаемый товар прежнего
+     * пути (заведён в карточке поставки, строки документа у него нет) уходит, как раньше.
+     * Проверяется сгенерированным файлом по адресу, который забирает Дром, а не вызовом
+     * сервиса: условие живёт в тексте запроса генератора.
+     */
+    @Test
+    @DisplayName("Позиция черновика поступления не уходит в прайс Дрома «в пути»; проведённая — уходит")
+    void draftIncomeLineStaysOutOfDromFeed() throws Exception {
+        String token = "d".repeat(43);
+        inTenant(() -> {
+            jdbc.update("DELETE FROM marketplace_account");
+            return jdbc.update("""
+                    INSERT INTO marketplace_account (marketplace, title, settings, feed_token)
+                    VALUES ('DROM', 'Поступления', '{"packetId":"1","expectedGoods":true}'::jsonb, ?)""",
+                    token);
+        });
+        long supply = supply("В пути " + UUID.randomUUID());
+        assertThat(inTenant(() -> jdbc.queryForObject("SELECT status FROM supply WHERE id = ?",
+                String.class, supply))).as("поставка из «+ Новая поставка» не в пути").isEqualTo("EXPECTED");
+
+        // Прежний путь: ожидаемый товар в карточке поставки и обычная позиция на складе.
+        mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"капот ожидаемый прежним путём\",\"condition\":\"USED\","
+                                + "\"quantity\":2,\"price\":9000,\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated());
+        mvc.perform(post("/api/intake/receipts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d,\"requestId\":\"%s\",\"items\":[{\"rawName\":\"крыло на складе\",\"price\":4000}]}"
+                                .formatted(warehouse, UUID.randomUUID())))
+                .andExpect(status().isCreated());
+
+        String draftName = "бампер черновика поступления";
+        List<String> before = feedParts(token);
+        assertThat(String.join("", before)).as("прежний путь: ожидаемый товар уходит «в пути»")
+                .containsIgnoringCase("капот ожидаемый прежним путём").containsIgnoringCase("крыло на складе");
+
+        long doc = create(supply, "Черновик в пути").path("id").asLong();
+        addItem(doc, draftName, "7000", null);
+        List<String> drafted = feedParts(token);
+        assertThat(String.join("", drafted)).as("позиция непроведённого черновика ушла на Дром")
+                .doesNotContainIgnoringCase(draftName);
+        assertThat(drafted).as("строки позиций, не тронутых черновиком, изменились").isEqualTo(before);
+
+        act(doc, "post", status().isOk());
+        List<String> posted = feedParts(token);
+        assertThat(String.join("", posted)).as("проведённая позиция не ушла на Дром").containsIgnoringCase(draftName);
+        assertThat(posted.stream().filter(part -> !part.toLowerCase().contains(draftName)).toList())
+                .as("проведение изменило чужие строки прайса").isEqualTo(before);
+
+        act(doc, "unpost", status().isOk());
+        List<String> unposted = feedParts(token);
+        assertThat(String.join("", unposted)).as("после «Отменить проводку» позиция осталась на Дроме")
+                .doesNotContainIgnoringCase(draftName);
+        assertThat(unposted).isEqualTo(before);
+
+        // Счётчик выгрузки считает тем же условием, что и файл.
+        String count = mvc.perform(post("/api/marketplace-accounts/filter/count").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedGoods\":true}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(count).as("счётчик выгрузки разошёлся с файлом")
+                .startsWith("{\"parts\":" + unposted.size() + ",");
+    }
+
+    /**
+     * Разбор PR 534: «черновик не попадает в прайс ни при какой поставке» — и после
+     * удаления проведённого поступления (0367: статус остаётся {@code DONE}, ставится
+     * {@code deleted_at}, карточке возвращается {@code DRAFT}), и после «Отменить»,
+     * и в документе из нескольких строк. Ожидаемый товар 0170 при этом после удаления
+     * своего поступления возвращается «в путь», а строка непроведённого документа
+     * снимает его снова. Удаление — настоящим {@code DELETE /api/stock/documents/{id}},
+     * проверка — файлом по адресу, который забирает Дром, и счётчиком выгрузки.
+     */
+    @Test
+    @DisplayName("Карточка из удалённого или отменённого поступления в прайс «в пути» не уходит; ожидаемая — возвращается")
+    void deletedOrCancelledIncomeStaysOutOfDromFeed() throws Exception {
+        String token = "e".repeat(43);
+        inTenant(() -> {
+            jdbc.update("DELETE FROM marketplace_account");
+            return jdbc.update("""
+                    INSERT INTO marketplace_account (marketplace, title, settings, feed_token)
+                    VALUES ('DROM', 'Удалённые поступления', '{"packetId":"1","expectedGoods":true}'::jsonb, ?)""",
+                    token);
+        });
+        long supply = supply("Удаления в пути " + UUID.randomUUID());
+
+        // Ожидаемый товар 0170: заведён в карточке поставки, принят проведённым документом.
+        String expectedName = "капот ожидаемый с удалённым приходом";
+        mvc.perform(post("/api/intake/supplies/" + supply + "/expected-parts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"%s\",\"condition\":\"USED\",\"quantity\":2,\"price\":9000,\"requestId\":\"%s\"}"
+                                .formatted(expectedName, UUID.randomUUID())))
+                .andExpect(status().isCreated());
+        long expected = inTenant(() -> jdbc.queryForObject(
+                "SELECT id FROM part WHERE supply_id = ? AND expected_origin", Long.class, supply));
+        assertThat(String.join("", feedParts(token))).as("ожидаемый товар до прихода не «в пути»")
+                .containsIgnoringCase(expectedName);
+        long receipt = body(mvc.perform(post("/api/intake/receipts").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"warehouseId":%d,"supplyId":%d,"requestId":"%s","items":[
+                                  {"rawName":"принимаем","quantity":2,"price":9000,"partId":%d}]}"""
+                                .formatted(warehouse, supply, UUID.randomUUID(), expected)))
+                .andExpect(status().isCreated()).andReturn()).path("documentId").asLong();
+
+        // Документ из двух строк: проведён и удалён.
+        String doorName = "дверь удалённого поступления";
+        String mirrorName = "зеркало удалённого поступления";
+        long twoLines = create(supply, "Две строки в пути").path("id").asLong();
+        addItem(twoLines, doorName, "6000", null);
+        addItem(twoLines, mirrorName, "2500", null);
+        act(twoLines, "post", status().isOk());
+        assertThat(String.join("", feedParts(token))).as("проведённые позиции не ушли на Дром")
+                .containsIgnoringCase(doorName).containsIgnoringCase(mirrorName);
+
+        deleteDocument(twoLines);
+        deleteDocument(receipt);
+        assertThat(inTenant(() -> jdbc.queryForList("""
+                SELECT p.status FROM part p JOIN stock_document_line l ON l.part_id = p.id
+                 WHERE l.document_id = ?""", String.class, twoLines)))
+                .as("удаление вернуло карточкам черновик — условие проверяется на том, ради чего написано")
+                .containsOnly("DRAFT");
+        assertThat(docStatus(twoLines)).as("удалённый документ остаётся выполненным").isEqualTo("DONE");
+        String afterDelete = String.join("", feedParts(token));
+        assertThat(afterDelete).as("карточка удалённого поступления ушла на Дром «в пути»")
+                .doesNotContainIgnoringCase(doorName).doesNotContainIgnoringCase(mirrorName);
+        assertThat(afterDelete).as("ожидаемый товар после удаления прихода не вернулся «в путь» (0367)")
+                .containsIgnoringCase(expectedName);
+
+        // Отменённый черновик.
+        String lampName = "фонарь отменённого черновика";
+        long cancelled = create(supply, "Отменённый в пути").path("id").asLong();
+        addItem(cancelled, lampName, "3000", null);
+        act(cancelled, "cancel", status().isOk());
+        assertThat(docStatus(cancelled)).isEqualTo("CANCELLED");
+        assertThat(String.join("", feedParts(token))).as("позиция отменённого черновика ушла на Дром")
+                .doesNotContainIgnoringCase(lampName);
+
+        // У ожидаемой позиции — строка удалённого выполненного документа и строка черновика.
+        long draft = create(supply, "Черновик приёма ожидаемой").path("id").asLong();
+        inTenant(() -> jdbc.update(
+                "INSERT INTO stock_document_line (document_id, part_id, qty) VALUES (?, ?, 1)", draft, expected));
+        List<String> last = feedParts(token);
+        assertThat(String.join("", last)).as("ожидаемая позиция с непроведённой строкой ушла на Дром «в пути»")
+                .doesNotContainIgnoringCase(expectedName);
+
+        String count = mvc.perform(post("/api/marketplace-accounts/filter/count").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedGoods\":true}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(count).as("счётчик выгрузки разошёлся с файлом")
+                .startsWith("{\"parts\":" + last.size() + ",");
+    }
+
+    private void deleteDocument(long doc) throws Exception {
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .delete("/api/stock/documents/" + doc).with(csrf()).session(owner))
+                .andExpect(status().is2xxSuccessful());
+    }
+
+    /** Позиции файла Дрома, каждая строкой целиком — как их забирает площадка. */
+    private List<String> feedParts(String token) throws Exception {
+        String file = mvc.perform(get("/feeds/drom/incomes/" + token + ".xml"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        List<String> parts = new ArrayList<>();
+        java.util.regex.Matcher part = java.util.regex.Pattern.compile("<part>.*?</part>",
+                java.util.regex.Pattern.DOTALL).matcher(file);
+        while (part.find()) {
+            parts.add(part.group());
+        }
+        return parts;
+    }
+
+    /**
+     * Решение владельца 30.10.2026: закупочные суммы и цены поступлений — по праву
+     * «Смотреть закупочную цену и себестоимость», а не всем вошедшим. Проверяется
+     * через HTTP на всех ответах, несущих документ: список, документ, и ответы
+     * изменяющих действий (продавец с «Принимать товар» добавляет позицию сам).
+     */
+    @Test
+    @DisplayName("Суммы и закупочные цены поступлений видит только право part.money.view")
+    void moneyNeedsTheRight() throws Exception {
+        JsonNode draft = create(null, "Деньги поступления");
+        long doc = draft.path("id").asLong();
+        mvc.perform(post("/api/intake/incomes/" + doc + "/items").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"стартер\",\"quantity\":2,\"price\":3000,"
+                                + "\"costPrice\":700,\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated());
+
+        // Владелец (всегда) и менеджер (право в раздаче ролей) видят как раньше.
+        for (MockHttpSession who : List.of(owner, login("menedzher"))) {
+            JsonNode seen = income(doc, who);
+            assertThat(seen.path("amount").decimalValue()).as("сумма у имеющего право")
+                    .isEqualByComparingTo("1400");
+            assertThat(seen.path("lines").get(0).path("cost").decimalValue()).isEqualByComparingTo("700");
+            assertThat(rowOf(doc, who).path("amount").decimalValue()).isEqualByComparingTo("1400");
+        }
+
+        MockHttpSession seller = login("prodavec");
+        MockHttpSession viewer = login("prosmotr");
+        for (MockHttpSession who : List.of(seller, viewer)) {
+            JsonNode seen = income(doc, who);
+            assertThat(seen.path("lines")).as("позиции без права видны").hasSize(1);
+            assertThat(seen.path("amount").isNull()).as("сумма документа ушла без права: " + seen)
+                    .isTrue();
+            assertThat(seen.path("lines").get(0).path("cost").isNull())
+                    .as("закупочная цена строки ушла без права").isTrue();
+            assertThat(rowOf(doc, who).path("amount").isNull())
+                    .as("сумма в списке ушла без права").isTrue();
+        }
+
+        // Ответ изменяющего действия — тоже документ целиком, и тоже без денег.
+        JsonNode added = body(mvc.perform(post("/api/intake/incomes/" + doc + "/items").with(csrf())
+                        .session(seller).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"генератор\",\"quantity\":1,\"costPrice\":500,"
+                                + "\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated()).andReturn());
+        assertThat(added.path("amount").isNull()).as("ответ «+ Добавить» продавцу несёт сумму").isTrue();
+        added.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «+ Добавить» несёт цену").isTrue());
+        JsonNode posted = body(mvc.perform(post("/api/intake/incomes/" + doc + "/post").with(csrf())
+                        .session(seller)).andExpect(status().isOk()).andReturn());
+        assertThat(posted.path("amount").isNull()).as("ответ «Провести» продавцу несёт сумму").isTrue();
+        posted.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «Провести» несёт цену").isTrue());
+        assertThat(income(doc, owner).path("amount").decimalValue()).isEqualByComparingTo("1900");
+
+        // Все шесть ответов, отдающих документ: «Отменить проводку», «Создать», «Отменить».
+        JsonNode unposted = body(mvc.perform(post("/api/intake/incomes/" + doc + "/unpost").with(csrf())
+                        .session(seller)).andExpect(status().isOk()).andReturn());
+        assertThat(unposted.path("amount").isNull()).as("ответ «Отменить проводку» продавцу несёт сумму")
+                .isTrue();
+        assertThat(unposted.path("lines")).isNotEmpty();
+        unposted.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «Отменить проводку» несёт цену").isTrue());
+
+        JsonNode created = body(mvc.perform(post("/api/intake/incomes").with(csrf()).session(seller)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"warehouseId\":%d,\"supplyId\":null,\"note\":null,\"requestId\":\"%s\"}"
+                                .formatted(warehouse, UUID.randomUUID())))
+                .andExpect(status().isCreated()).andReturn());
+        assertThat(created.path("amount").isNull()).as("ответ «Создать» продавцу несёт сумму").isTrue();
+        long second = created.path("id").asLong();
+        mvc.perform(post("/api/intake/incomes/" + second + "/items").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rawName\":\"радиатор\",\"quantity\":1,\"price\":2000,"
+                                + "\"costPrice\":900,\"requestId\":\"%s\"}".formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated());
+        assertThat(income(second, owner).path("amount").decimalValue()).isEqualByComparingTo("900");
+        JsonNode cancelled = body(mvc.perform(post("/api/intake/incomes/" + second + "/cancel").with(csrf())
+                        .session(seller)).andExpect(status().isOk()).andReturn());
+        assertThat(cancelled.path("amount").isNull()).as("ответ «Отменить» продавцу несёт сумму").isTrue();
+        assertThat(cancelled.path("lines")).isNotEmpty();
+        cancelled.path("lines").forEach(line ->
+                assertThat(line.path("cost").isNull()).as("ответ «Отменить» несёт цену").isTrue());
+    }
+
+    private JsonNode income(long doc, MockHttpSession who) throws Exception {
+        return body(mvc.perform(get("/api/intake/incomes/" + doc).session(who))
+                .andExpect(status().isOk()).andReturn());
+    }
+
+    private JsonNode rowOf(long doc, MockHttpSession who) throws Exception {
+        JsonNode page = body(mvc.perform(get("/api/intake/incomes").param("tab", "all").session(who))
+                .andExpect(status().isOk()).andReturn());
+        for (JsonNode row : page.path("rows")) {
+            if (row.path("id").asLong() == doc) {
+                return row;
+            }
+        }
+        throw new AssertionError("поступления нет в списке");
+    }
+
+    /**
+     * Блокировка документа — то, ради чего {@code complete} меняет состояние
+     * до движений: без неё два одновременных «Провести» оба видят черновик
+     * и пишут приход дважды. Последовательный повтор этого не ловит, поэтому
+     * шесть запросов разом и несколько кругов (образец — разбор PR 534).
+     */
+    @Test
+    @DisplayName("Шесть одновременных «Провести» и «Отменить проводку» дают один приход и одну отмену")
+    void concurrentPostAndUnpostTouchStockOnce() throws Exception {
+        for (int round = 0; round < 5; round++) {
+            long doc = create(null, null).path("id").asLong();
+            long part = addItem(doc, "капот " + round, "5000", null)
+                    .path("lines").get(0).path("partId").asLong();
+
+            assertThat(parallel(doc, "post", 6)).as("одновременное «Провести» получило отказ")
+                    .containsOnly(200);
+            assertThat(stock(part)).as("одновременное «Провести» записало приход дважды")
+                    .isEqualByComparingTo("1");
+            assertThat(movements(part)).as("движения после одновременного «Провести»").hasSize(1);
+
+            assertThat(parallel(doc, "unpost", 6)).as("одновременная «Отменить проводку» получила отказ")
+                    .containsOnly(200);
+            assertThat(stock(part)).as("одновременная «Отменить проводку» сняла приход дважды")
+                    .isEqualByComparingTo("0");
+            assertThat(movements(part)).as("движения после одновременной отмены").hasSize(2);
+            assertThat(discrepancies()).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("Отмена проводки целиком или никак: вторая строка продана — первая остаётся на складе")
+    void unpostRollsBackWholeDocument() throws Exception {
+        long doc = create(null, null).path("id").asLong();
+        addItem(doc, "дверь передняя", "100", null);
+        JsonNode two = addItem(doc, "дверь задняя", "100", null);
+        long first = two.path("lines").get(0).path("partId").asLong();
+        long second = two.path("lines").get(1).path("partId").asLong();
+        act(doc, "post", status().isOk());
+        inTenant(() -> ledger.record(StockMovement.sale(second, BigDecimal.ONE, warehouse, null)));
+
+        JsonNode refused = act(doc, "unpost", status().isConflict());
+        assertThat(refused.path("message").asText()).contains("дверь задняя").contains("продана");
+        assertThat(stock(first)).as("первая строка снята, хотя отмена отказана")
+                .isEqualByComparingTo("1");
+        assertThat(movements(first)).as("у первой строки осталось встречное движение")
+                .containsExactly("INTAKE 1.000 null");
+        assertThat(docStatus(doc)).isEqualTo("DONE");
+        assertThat(discrepancies()).isZero();
+    }
+
+    @Test
+    @DisplayName("Продали и вернули, потом списали — отказ называет списание, а не продажу")
+    void returnedSaleIsNotTheReason() throws Exception {
+        long doc = create(null, null).path("id").asLong();
+        long part = addItem(doc, "крышка багажника", "700", null)
+                .path("lines").get(0).path("partId").asLong();
+        act(doc, "post", status().isOk());
+        inTenant(() -> {
+            ledger.record(StockMovement.sale(part, BigDecimal.ONE, warehouse, null));
+            ledger.record(StockMovement.returned(part, BigDecimal.ONE, warehouse, null));
+            return ledger.record(StockMovement.writeOff(part, BigDecimal.ONE, warehouse));
+        });
+
+        String message = act(doc, "unpost", status().isConflict()).path("message").asText();
+        assertThat(message).as("вернувшаяся продажа названа причиной")
+                .doesNotContain("продана").contains("перевезли или списали");
+        assertThat(docStatus(doc)).isEqualTo("DONE");
+    }
+
+    private List<Integer> parallel(long doc, String action, int n) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(n);
+        CyclicBarrier start = new CyclicBarrier(n);
+        List<Future<Integer>> answers = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            answers.add(pool.submit(() -> {
+                start.await();
+                return mvc.perform(post("/api/intake/incomes/" + doc + "/" + action)
+                                .with(csrf()).session(owner))
+                        .andReturn().getResponse().getStatus();
+            }));
+        }
+        List<Integer> codes = new ArrayList<>();
+        for (Future<Integer> answer : answers) {
+            codes.add(answer.get());
+        }
+        pool.shutdown();
+        return codes;
+    }
+
+    // ---------- вспомогательное ----------
+
+    private long supply(String name) throws Exception {
+        return body(mvc.perform(post("/api/intake/supplies").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"OTHER\",\"number\":\"%s\",\"note\":\"описание\"}".formatted(name)))
+                .andExpect(status().isCreated()).andReturn()).path("id").asLong();
+    }
+
+    private JsonNode create(Long supply, String note) throws Exception {
+        String content = "{\"warehouseId\":%d,\"supplyId\":%s,\"note\":%s,\"requestId\":\"%s\"}"
+                .formatted(warehouse, supply, note == null ? "null" : json.writeValueAsString(note),
+                        UUID.randomUUID());
+        return body(mvc.perform(post("/api/intake/incomes").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content(content))
+                .andExpect(status().isCreated()).andReturn());
+    }
+
+    private JsonNode addItem(long doc, String name, String price, String note) throws Exception {
+        String content = "{\"rawName\":%s,\"quantity\":1,\"price\":%s,\"note\":%s,\"requestId\":\"%s\"}"
+                .formatted(json.writeValueAsString(name), price,
+                        note == null ? "null" : json.writeValueAsString(note), UUID.randomUUID());
+        return body(mvc.perform(post("/api/intake/incomes/" + doc + "/items").with(csrf()).session(owner)
+                        .contentType(MediaType.APPLICATION_JSON).content(content))
+                .andExpect(status().isCreated()).andReturn());
+    }
+
+    private JsonNode act(long doc, String action, ResultMatcher expected) throws Exception {
+        return body(mvc.perform(post("/api/intake/incomes/" + doc + "/" + action).with(csrf()).session(owner))
+                .andExpect(expected).andReturn());
+    }
+
+    private JsonNode list(String tab) throws Exception {
+        return body(mvc.perform(get("/api/intake/incomes").param("tab", tab).session(owner))
+                .andExpect(status().isOk()).andReturn());
+    }
+
+    private JsonNode history(long part) throws Exception {
+        return body(mvc.perform(get("/api/parts/" + part + "/history").session(owner))
+                .andExpect(status().isOk()).andReturn());
+    }
+
+    private boolean catalogFinds(String query, boolean missing) throws Exception {
+        JsonNode view = body(mvc.perform(get("/api/parts/catalog").param("q", query)
+                        .param("missing", String.valueOf(missing)).session(owner))
+                .andExpect(status().isOk()).andReturn());
+        return view.path("rows").size() > 0;
+    }
+
+    private static List<String> texts(JsonNode income) {
+        List<String> out = new ArrayList<>();
+        income.path("history").forEach(e -> out.add(e.path("text").asText()));
+        return out;
+    }
+
+    private JsonNode body(MvcResult result) throws Exception {
+        return json.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8));
+    }
+
+    private BigDecimal stock(long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT coalesce(sum(qty), 0) FROM part_stock WHERE part_id = ? AND warehouse_id = ?",
+                BigDecimal.class, part, warehouse));
+    }
+
+    private BigDecimal onHand(long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT qty_on_hand FROM part WHERE id = ?", BigDecimal.class, part));
+    }
+
+    private String partStatus(long part) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT status FROM part WHERE id = ?", String.class, part));
+    }
+
+    private String docStatus(long doc) {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT status FROM stock_document WHERE id = ?", String.class, doc));
+    }
+
+    private List<String> movements(long part) {
+        return inTenant(() -> jdbc.queryForList("""
+                SELECT movement_type || ' ' || qty_delta || ' ' || coalesce(ref_type, 'null')
+                  FROM stock_movement WHERE part_id = ? ORDER BY id""", String.class, part));
+    }
+
+    private int discrepancies() {
+        return inTenant(() -> jdbc.queryForObject(
+                "SELECT count(*) FROM v_stock_discrepancy", Integer.class));
+    }
+
+    private void member(String login, String displayName, String role) {
+        var found = jdbc.queryForList(
+                "SELECT id FROM tenant_member WHERE login = ?", Long.class, login);
+        if (found.isEmpty()) {
+            jdbc.update("""
+                    INSERT INTO tenant_member (display_name, role, login, password_hash)
+                    VALUES (?, ?, ?, ?)""",
+                    displayName, role, login, passwordEncoder.encode("пароль"));
+        } else {
+            // Фикстура пишет то, что называет (корневой CLAUDE.md, «Тесты»).
+            jdbc.update("UPDATE tenant_member SET display_name = ?, role = ? WHERE login = ?",
+                    displayName, role, login);
+        }
+    }
+
+    private MockHttpSession login(String login) throws Exception {
+        var result = mvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"company":"incomes","login":"%s","password":"пароль"}"""
+                                .formatted(login)))
+                .andExpect(status().isOk())
+                .andReturn();
+        return (MockHttpSession) result.getRequest().getSession(false);
+    }
+
+    private <T> T inTenant(Supplier<T> body) {
+        TenantContext.set(TENANT);
+        try {
+            return transactionTemplate.execute(s -> body.get());
+        } finally {
+            TenantContext.clear();
+        }
+    }
+}
