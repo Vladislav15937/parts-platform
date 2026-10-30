@@ -788,7 +788,7 @@ export function PartCard({ row, warehouses, rights, extraFields, applicability =
             {!editing && rights.has('part.cell') && (
               <PartLabelPrint
                 key={row.id}
-                code={row.code}
+                number={row.number}
                 title={row.title}
                 price={row.price}
                 condition={row.condition}

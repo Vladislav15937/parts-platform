@@ -46,13 +46,15 @@ describe('печать этикетки из карточки позиции', (
     // печатается открытая позиция и только она.
     const labels = await screen.findAllByRole('img', { name: /Штрихкод/ });
     expect(labels.length, 'этикеток на листе не одна').toBe(1);
-    expect(labels[0]?.getAttribute('aria-label')).toBe('Штрихкод B-40219');
+    // Штрихкод кодирует номер товара, а не публичный код (задача 0366).
+    expect(labels[0]?.getAttribute('aria-label')).toBe('Штрихкод 300042');
     // Что на самой наклейке: код, наименование и цена этой позиции.
     // Пробел в числе неразрывный — сводим, чтобы сравнивать читаемое.
     const label = labels[0]?.closest('article')?.textContent?.replace(/ /g, ' ');
     expect(label, 'на этикетке нет наименования').toContain('Фара левая Toyota Camry');
     expect(label, 'на этикетке нет цены').toContain('12 500 ₽');
-    expect(label, 'на этикетке нет кода').toContain('B-40219');
+    expect(label, 'на этикетке нет номера товара').toContain('300 042');
+    expect(label, 'публичный код уехал на этикетку').not.toContain('B-40219');
     // Без неё принтер ужимает штрихкод, и сканер перестаёт его брать.
     expect(screen.getByText(/58×40 мм/), 'не сказано, какой размер выставить в диалоге')
       .toBeTruthy();
@@ -65,17 +67,18 @@ describe('печать этикетки из карточки позиции', (
     fireEvent.click(await screen.findByRole('button', { name: 'Печать штрих-кода' }));
     await screen.findAllByRole('img', { name: /Штрихкод/ });
 
-    const second = { ...row(), id: 77, code: 'B-77012', title: 'Бампер передний' };
+    const second = { ...row(), id: 77, number: 377012, code: 'B-77012', title: 'Бампер передний' };
     rerender(<PartCard {...props(second)} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Печать штрих-кода' }));
 
     const labels = await screen.findAllByRole('img', { name: /Штрихкод/ });
     expect(labels.length, 'к новой этикетке подклеилась прежняя').toBe(1);
-    expect(labels[0]?.getAttribute('aria-label')).toBe('Штрихкод B-77012');
+    expect(labels[0]?.getAttribute('aria-label')).toBe('Штрихкод 377012');
   });
 
-  it('позиция без кода не печатает и говорит почему', async () => {
-    render(<PartCard {...props({ ...row(), code: null })} />);
+  it('позиция без номера товара не печатает и говорит почему', async () => {
+    // Тип номер обещает всегда; ответ без него экран обязан назвать, а не упасть.
+    render(<PartCard {...props({ ...row(), number: null as unknown as number })} />);
 
     const button = await screen.findByRole('button', { name: 'Печать штрих-кода' });
     expect((button as HTMLButtonElement).disabled, 'кнопка нажимается на нечего печатать')
@@ -107,7 +110,7 @@ function props(row: CatalogRow) {
 function row(): CatalogRow {
   return {
     id: 42,
-    number: 42,
+    number: 300042,
     code: 'B-40219',
     title: 'Фара левая Toyota Camry',
     qualityGrade: null,

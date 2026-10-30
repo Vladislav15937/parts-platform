@@ -279,7 +279,7 @@ class WheelServiceTest extends PostgresTestBase {
         // а обе шины попали. Колонка ищется по заголовку, а не по номеру:
         // номер сдвигается всякий раз, когда в начало приходит новая
         // колонка, — так и случилось с «№ позиции» (задача 0061).
-        int code = WheelService.exportHeader(found).indexOf("Номер товара");
+        int code = WheelService.exportHeader(found).indexOf("Публичный код");
         var codes = rows.stream().map(row -> row.get(code)).toList();
         assertThat(codes).containsAll(codesOf(tyres.partIds()))
                 .doesNotContainAnyElementsOf(codesOf(disc.partIds()));
@@ -381,8 +381,8 @@ class WheelServiceTest extends PostgresTestBase {
         });
 
         var header = WheelService.exportHeader(found);
-        assertThat(header.indexOf("№ позиции"))
-                .as("колонки «№ позиции» в заголовке выгрузки колёс нет "
+        assertThat(header.indexOf("Номер товара"))
+                .as("колонки «Номер товара» в заголовке выгрузки колёс нет "
                         + "или она стоит не первой: %s", header)
                 .isZero();
         assertThat(rows.stream().map(row -> row.get(0)).toList())
@@ -570,7 +570,7 @@ class WheelServiceTest extends PostgresTestBase {
         // Скачанный файл обязан совпасть с экраном: диск под отбор шины
         // не подходит и в файл не попал.
         var header = WheelService.exportHeader(found);
-        var codes = rows.stream().map(row -> row.get(header.indexOf("Номер товара"))).toList();
+        var codes = rows.stream().map(row -> row.get(header.indexOf("Публичный код"))).toList();
         assertThat(codes).containsAll(codesOf(tyres.partIds()))
                 .doesNotContainAnyElementsOf(codesOf(disc.partIds()));
         assertThat(rows).allSatisfy(

@@ -342,8 +342,8 @@ class SoldItemsReportTest extends PostgresTestBase {
         // Номер позиции и в файле: его качают ради сверки с экраном, и состав
         // колонок обязан быть тем же (задача 0168).
         assertThat(all)
-                .as("колонки «№ позиции» в файле нет — он разошёлся с экраном")
-                .contains("№ позиции");
+                .as("колонки «Номер товара» в файле нет — он разошёлся с экраном")
+                .contains("Номер товара");
         long doorNumber = inTenant(TENANT, () -> jdbc.queryForObject(
                 "SELECT number FROM part WHERE id = ?", Long.class, doorPart));
         assertThat(all)

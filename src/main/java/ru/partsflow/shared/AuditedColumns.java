@@ -93,8 +93,10 @@ public final class AuditedColumns {
         // inventory.PartIdentity через AuditJournal, мимо сущности: oem и crosses
         // не колонки part, а номера производителя из part_oem, названные так
         // в снимке правки.
-        PART.put("number", "№ позиции");
-        PART.put("public_code", "Номер товара");
+        // Задача 0366: «Номер товара» — порядковый номер, как у ориентира; шестнадцатеричный
+        // код в прежних записях истории назван своим именем (правки 0302–0366).
+        PART.put("number", "Номер товара");
+        PART.put("public_code", "Публичный код");
         PART.put("oem", "Номер производителя");
         PART.put("crosses", "Кросс-номера");
         PART.put("authenticity", "Оригинальность");

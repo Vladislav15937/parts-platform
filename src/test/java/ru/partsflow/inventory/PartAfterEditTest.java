@@ -42,8 +42,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * «сохранено» и дальше не доносила или отказывала без причины.
  *
  * <ol>
- *   <li>«№ позиции» на миллионы вперёд — без предела «похоже на опечатку»;
- *       граница только у типа, словами; гонка с приёмкой не отдаёт номер двоим.</li>
+ *   <li>«№ позиции» на миллионы вперёд — с задачи 0366 номер товара не правится
+ *       вовсе («Всё как у bazon»), и проверки этого пункта сняты: отказ стережёт
+ *       {@code PartAllFieldsEditTest.numberAndCodeAreNotEdited}.</li>
  *   <li>Машина, исправленная в карточке, — в прайсе Дрома, отборе выгрузки,
  *       её счётчике, отборе продавца и подборе «что подходит». С задачи 0365
  *       у позиции с донором её не правят, но вписанная раньше хранится —
@@ -152,100 +153,6 @@ class PartAfterEditTest extends PostgresTestBase {
             ledger.record(StockMovement.intake(neighbour, BigDecimal.ONE, warehouse, null));
             return null;
         });
-    }
-
-    // ---------------------------------------------------------- пункт 1: № позиции
-
-    @Test
-    @DisplayName("№ позиции на миллионы выше выданного принимается, и приёмка продолжает нумерацию после него")
-    void numberFarAheadIsAccepted() throws Exception {
-        MockHttpSession owner = login();
-        long ahead = inTenant(() -> jdbc.queryForObject(
-                "SELECT max(number) + 5000000 FROM part", Long.class));
-
-        put(owner, "\"number\":" + ahead).andExpect(status().isOk());
-
-        assertThat(inTenant(() -> jdbc.queryForObject(
-                "SELECT number FROM part WHERE id = ?", Long.class, partId))).isEqualTo(ahead);
-        Long next = inTenant(() -> jdbc.queryForObject("""
-                INSERT INTO part (category_id, title, price) VALUES (1, 'Следующая', 100)
-                RETURNING number""", Long.class));
-        assertThat(next).as("приёмка выдала номер не выше вписанного").isGreaterThan(ahead);
-    }
-
-    @Test
-    @DisplayName("Номер за границей типа отвечает словами, а не «запрос не разобран» и не 500")
-    void numberBeyondTheTypeIsRefusedInWords() throws Exception {
-        MockHttpSession owner = login();
-        for (String sent : List.of("9007199254740992", "99999999999999999999",
-                "\"99999999999999999999\"")) {
-            String message = put(owner, "\"number\":" + sent)
-                    .andExpect(status().isBadRequest())
-                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-            assertThat(message).as("номер %s", sent).contains("9 007 199 254 740 991");
-        }
-        // Сама граница — принимается: это номер, а не запрет. Номер и нумерация
-        // возвращаются после проверки: остальным методам класса нужен запас.
-        Map<String, Object> was = inTenant(() -> jdbc.queryForMap(
-                "SELECT (SELECT number FROM part WHERE id = ?) AS number, last_value, is_called"
-                        + " FROM part_number_seq", partId));
-        try {
-            put(owner, "\"number\":9007199254740991").andExpect(status().isOk());
-        } finally {
-            inTenant(() -> {
-                jdbc.update("UPDATE part SET number = ? WHERE id = ?", was.get("number"), partId);
-                return jdbc.queryForObject("SELECT setval('part_number_seq', ?, ?)", Long.class,
-                        was.get("last_value"), was.get("is_called"));
-            });
-        }
-    }
-
-    @Test
-    @DisplayName("Правка номера и приёмка в одну минуту не выдают одинаковый номер и не отказывают")
-    void numberEditAndIntakeDoNotCollide() throws Exception {
-        long target = inTenant(() -> jdbc.queryForObject(
-                "SELECT CASE WHEN is_called THEN last_value ELSE last_value - 1 END + 1"
-                        + " FROM part_number_seq", Long.class));
-        JdbcTemplate other = new JdbcTemplate(new DriverManagerDataSource(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
-        AtomicReference<Object> intake = new AtomicReference<>();
-        Thread[] racer = new Thread[1];
-        // Приёмка встаёт ровно между «номер свободен» и записью номера: без
-        // очереди она взяла бы тот же номер, и одна из двух получила бы отказ.
-        HookJdbc hooked = new HookJdbc(jdbc, sql -> {
-            if (racer[0] == null && sql.contains("SELECT public_code FROM part WHERE number")) {
-                racer[0] = new Thread(() -> {
-                    try {
-                        intake.set(other.queryForObject("""
-                                INSERT INTO %s.part (category_id, title, price)
-                                VALUES (1, 'Приёмка во время правки', 100) RETURNING number"""
-                                .formatted(TENANT), Long.class));
-                    } catch (RuntimeException e) {
-                        intake.set(e);
-                    }
-                });
-                racer[0].start();
-                join(racer[0], 700);
-            }
-        });
-        PartIdentity identity = new PartIdentity(hooked, journal, new ru.partsflow.catalog.BazonVehicles(hooked));
-
-        Throwable edit = null;
-        try {
-            inTenant(() -> identity.apply(partId, new PartIdentity.Edit(BigInteger.valueOf(target),
-                    null, null, null, null, null, null, null, null, null, null, null, null, null),
-                    null));
-        } catch (RuntimeException e) {
-            edit = e;
-        }
-        join(racer[0], 10_000);
-
-        assertThat(edit).as("правка номера отказала: приёмка заняла его между проверкой и записью")
-                .isNull();
-        assertThat(intake.get()).as("приёмка во время правки номера получила отказ")
-                .isInstanceOf(Long.class);
-        assertThat((Long) intake.get()).as("приёмка выдала номер, вписанный правкой")
-                .isGreaterThan(target);
     }
 
     // ---------------------------------------------------------- пункт 2: машина
@@ -479,31 +386,6 @@ class PartAfterEditTest extends PostgresTestBase {
             return transactionTemplate.execute(status -> body.get());
         } finally {
             TenantContext.clear();
-        }
-    }
-
-    private static void join(Thread thread, long millis) {
-        try {
-            thread.join(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /** JdbcTemplate того же источника, который зовёт подкладку после каждого запроса. */
-    private static final class HookJdbc extends JdbcTemplate {
-        private final java.util.function.Consumer<String> after;
-
-        HookJdbc(JdbcTemplate base, java.util.function.Consumer<String> after) {
-            super(base.getDataSource());
-            this.after = after;
-        }
-
-        @Override
-        public <T> List<T> queryForList(String sql, Class<T> type, Object... args) {
-            List<T> r = super.queryForList(sql, type, args);
-            after.accept(sql);
-            return r;
         }
     }
 }

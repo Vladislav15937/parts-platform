@@ -251,8 +251,8 @@ export function LabelsScreen({ canPrint }: Props) {
               </button>
             </form>
             <p className="note">
-              На этикетку детали идёт неугадываемый код карточки, а не её номер:
-              этикетка уезжает к покупателю вместе с деталью.
+              На этикетку детали идёт Номер товара — крупно и в штрихкоде.
+              Этикетки, напечатанные раньше, сканер тоже находит.
             </p>
             {/*
               * Обрезанная выдача говорит, что она обрезана.
@@ -313,8 +313,10 @@ export function LabelsScreen({ canPrint }: Props) {
         setPartsFound(found.total - (found.rows.length - physical.length));
         setPartLabels(
           physical
-            .filter((row) => row.publicCode !== null)
-            .map((row) => partLabel(row.publicCode!, row.title, row.price, row.condition)),
+            // Этикетка кодирует Номер товара (задача 0366); он есть у каждой
+            // позиции, а ответ без него печатать нечем — пустой штрихкод.
+            .filter((row) => row.number !== null && row.number !== undefined)
+            .map((row) => partLabel(row.number, row.title, row.price, row.condition)),
         );
       }
     } catch (cause) {

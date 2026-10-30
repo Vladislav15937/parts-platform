@@ -1,3 +1,4 @@
+import { PART_NUMBER_TITLE, partNumber } from './partNumber';
 import { request } from '../api/client';
 import { count, goods, plural } from '../ui/plural';
 import type { NotSavedField } from './notSaved';
@@ -763,13 +764,16 @@ function day(value: string | null): string {
 }
 
 export const COLUMNS: Column[] = [
-  // Первой колонкой и по ней же порядок по умолчанию: «посмотри позицию 347»
+  // Первой колонкой и по ней же порядок по умолчанию: «посмотри 300 001»
   // — это то, чем на разборке называют деталь в разговоре друг с другом.
-  // Публичный код рядом остаётся: он про этикетку и сканер, Code128 кодирует
-  // его, а «347» — нет.
-  { key: 'number', title: '№ позиции', sort: 'number', numeric: true,
-    value: (r) => text(r.number) },
-  { key: 'code', title: 'Номер товара', sort: 'code', value: (r) => text(r.code) },
+  // «Номер товара» — порядковый номер, как у ориентира (задача 0366, «Всё как
+  // у bazon»): он же на этикетке и в штрихкоде, он же `id` объявления Дрома.
+  { key: 'number', title: PART_NUMBER_TITLE, sort: 'number', numeric: true,
+    value: (r) => partNumber(r.number) },
+  // Шестнадцатеричный код: по умолчанию не показывается (задача 0366), но
+  // в «Настроить таблицу» остаётся — его несут прежние этикетки, и сканер
+  // находит по нему позицию. Ключ `code` прежний: это и имя отбора на сервере.
+  { key: 'code', title: 'Публичный код', sort: 'code', value: (r) => text(r.code) },
   // Вторым столбцом, как в кабинете: по снимку деталь узнают быстрее,
   // чем по наименованию, — особенно когда наименований на складе тысяча.
   { key: 'photo', title: 'Превью', sort: 'photo', value: () => '', image: (r) => r.photoUrl, fixed: true },
@@ -918,7 +922,7 @@ export function sortOfColumn(key: string): string | undefined {
  * 0316), а после смены состояния она и сегодня врёт (0304).
  */
 export const DEFAULT_VISIBLE = [
-  'number', 'code', 'photo', 'title', 'condition', 'brand', 'model', 'year', 'sideFr',
+  'number', 'photo', 'title', 'condition', 'brand', 'model', 'year', 'sideFr',
   'sideLr', 'price', 'section',
 ];
 
@@ -1087,6 +1091,7 @@ export function loadView(size: number): Promise<CatalogView> {
 function memorable(view: CatalogView): Record<string, unknown> {
   const { query } = view;
   return {
+    [LAYOUT_MARK]: LAYOUT_0366,
     visible: view.visible,
     sort: query.sort,
     desc: query.desc,
@@ -1099,6 +1104,10 @@ function memorable(view: CatalogView): Record<string, unknown> {
     vehicle: query.vehicle,
   };
 }
+
+/** Отметка раскладки, сохранённой после задачи 0366 (см. {@link viewOf}). */
+const LAYOUT_MARK = 'layout';
+const LAYOUT_0366 = 366;
 
 /** Снимок запоминаемого строкой: по нему видно, менялось ли оно вообще. */
 export function viewKey(view: CatalogView): string {
@@ -1136,7 +1145,12 @@ function viewOf(saved: Record<string, unknown> | null, size: number): CatalogVie
       .filter(([, item]) => typeof item === 'string') as Array<[string, string]>;
     return Object.fromEntries(pairs);
   };
-  const visible = strings(saved.visible);
+  // Раскладка, сохранённая до задачи 0366, держит `code` включённым: тогда эта
+  // колонка называлась «Номер товара» и стояла в умолчании. Её снимаем один раз —
+  // иначе у всех, кто хоть раз трогал склад, шестнадцатеричная строка осталась бы
+  // на экране. Включённая после 0366 сохраняется с отметкой и не снимается.
+  const visible = strings(saved.visible)
+    .filter((key) => saved[LAYOUT_MARK] === LAYOUT_0366 || key !== 'code');
 
   return {
     visible: visible.length > 0 ? visible : DEFAULT_VISIBLE,
@@ -1272,6 +1286,8 @@ export function changePartCell(
 export interface MoveSkipped {
   partId: number;
   publicCode: string;
+  /** Номер товара (задача 0366) — им непоехавшие названы на экране. */
+  number: number;
 }
 
 export interface MoveBulkResult {
@@ -1386,11 +1402,11 @@ export interface PartEdit {
    * своего нет, и показывается донор или применимость из строки витрины.
    */
   /**
-   * № позиции. Уезжает строкой цифр, а не числом (задача 0303): число
-   * в браузере точно только до 2^53 − 1, и вписанное больше уехало бы
-   * округлённым — сервер принял бы не тот номер. Приходит числом.
+   * Номер товара (задача 0366). Приходит, чтобы форма показала его под
+   * замком; не уезжает никогда — его присваивает система. Публичный код
+   * форма не показывает и не шлёт.
    */
-  number?: number | string | null | undefined;
+  number?: number | null | undefined;
   code?: string | null | undefined;
   title?: string | null | undefined;
   sideLr?: string | null | undefined;

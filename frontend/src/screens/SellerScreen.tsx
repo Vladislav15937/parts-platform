@@ -1,3 +1,4 @@
+import { partNumber } from '../inventory/partNumber';
 import type { Rights } from '../access/rights';
 import { LockedAction } from '../ui/LockedAction';
 import { useEffect, useRef, useState } from 'react';
@@ -405,7 +406,7 @@ export function SellerScreen({
                       отобранное было нечем вовсе. */}
                   <span className="muted">
                     {' '}
-                    · №&nbsp;{line.row.number} · {line.quantity} шт
+                    · №&nbsp;{partNumber(line.row.number)} · {line.quantity} шт
                     {line.row.expected
                       ? ' · ожидается, предзаказ'
                       : <>{' '}· {line.row.warehouseName}</>}
@@ -978,11 +979,10 @@ function StockItem({
         <strong>{row.title}</strong>
         <ConditionWord code={row.condition} />
         <OemWord number={row.primaryOem} />
-        {/* Номер позиции перед публичным кодом — тем же порядком, каким они
-            стоят колонками на витрине. Продавец диктует в трубку именно
-            его: «7584A8FEAE3D» по телефону не произносят. */}
-        <span className="muted"> · №&nbsp;{row.number}</span>
-        {row.publicCode !== null && <span className="muted"> · {row.publicCode}</span>}
+        {/* Номер товара — тот, что на этикетке и в штрихкоде, и его же продавец
+            диктует в трубку. Шестнадцатеричного кода в строке больше нет
+            (задача 0366): человеку он не говорит ничего. */}
+        <span className="muted"> · №&nbsp;{partNumber(row.number)}</span>
         {row.expected ? (
           // Ожидаемая позиция: на складе её нет, и «свободно» тут значит
           // другое — сколько ещё можно отложить предзаказом. Склад и ячейку
@@ -1733,8 +1733,8 @@ function DealCard({
                 {/* Номер позиции (задача 0168): состав сделки и выбор позиций
                     на возврат называют деталь вслух — кладовщику, который
                     пойдёт снимать её с полки. Порядок тот же, что в строке
-                    выдачи и в корзине: наименование, номер, публичный код. */}
-                {typeof item.number === 'number' && <>· №&nbsp;{item.number} </>}
+                    выдачи и в корзине: наименование, номер товара. */}
+                {typeof item.number === 'number' && <>· №&nbsp;{partNumber(item.number)} </>}
                 · {Number(item.quantity)} шт · {dealItemStatusName(item.status)}
               </span>
             </label>

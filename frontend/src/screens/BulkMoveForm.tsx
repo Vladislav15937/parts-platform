@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { movePartsBulk, type CatalogRow, type Warehouse } from '../inventory/catalog';
+import { partNumber } from '../inventory/partNumber';
 import { listCells, type Cell } from '../organization/warehouses';
 import { positions } from '../ui/plural';
 import { useMounted } from '../ui/useMounted';
@@ -103,7 +104,7 @@ export function BulkMoveForm({ rows, warehouses, onDone, onCancel }: {
       const notice = outcome.notMoved.length === 0
         ? `Перевезено: ${outcome.items}.`
         : `Перевезено: ${outcome.items}. Не поехали: ${outcome.notMoved.length} — `
-          + `обещаны покупателю (${outcome.notMoved.map((s) => s.publicCode).join(', ')}).`;
+          + `обещаны покупателю (${outcome.notMoved.map((s) => `№ ${partNumber(s.number)}`).join(', ')}).`;
       if (mounted.current) onDone(notice);
     } catch (cause) {
       if (mounted.current) {

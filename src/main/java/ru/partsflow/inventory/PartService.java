@@ -381,6 +381,15 @@ public class PartService {
             throw new IllegalArgumentException(TITLE_IS_DERIVED);
         }
 
+        // Номер товара и публичный код — под замком (задача 0366, «Всё как у bazon»):
+        // номер называют вслух и он же `id` объявления Дрома (0334), а код —
+        // штрихкод прежних этикеток. Присланное, равное лежащему, — не правка:
+        // так шлёт форму вкладка, открытая до выкладки.
+        String numberLocked = PartIdentity.numberLocked(identity.of(partId), request.identity());
+        if (numberLocked != null) {
+            log.warn("Правка позиции {} отбита: прислан номер товара или публичный код", partId);
+            throw new IllegalArgumentException(numberLocked);
+        }
         // Номер, который нельзя сохранить (задача 0312), — отказ словами раньше
         // сверки чужой правки: он про сам запрос, а не про то, что успел другой.
         PartIdentity.requireStorable(request.identity());
@@ -436,7 +445,7 @@ public class PartService {
         // это просьба о цене, и «округлить» без шага обязано отказать словами.
         boolean priceSent = update.has("price") || (update.has("priceOp") && priceOp.arithmetic());
         BigDecimal wanted = !priceSent ? null : priceOp.apply(part.getPrice(),
-                update.price(), MoneyField.PRICE, part.getPublicCode());
+                update.price(), MoneyField.PRICE, part.shownNumber());
         boolean priceChanged = wanted != null
                 && (part.getPrice() == null || part.getPrice().compareTo(wanted) != 0);
         // Поля формулы названия до правки (задача 0336): пересобирается оно,
@@ -952,7 +961,7 @@ public class PartService {
             } catch (PriceOperation.Refused refused) {
                 rejected++;
                 if (rejectedCodes.size() < REJECTED_NAMED) {
-                    rejectedCodes.add(part.getPublicCode());
+                    rejectedCodes.add(part.shownNumber());
                 }
                 if (rejectedReason == null) {
                     rejectedReason = refused.getMessage();
@@ -1162,7 +1171,7 @@ public class PartService {
             // Сколько пропущено, вызывающий скажет человеку.
             return new Money(null, false, true);
         }
-        BigDecimal next = op.apply(current, operand, what, part.getPublicCode());
+        BigDecimal next = op.apply(current, operand, what, part.shownNumber());
         return next == null ? new Money(null, false, false) : new Money(next, true, false);
     }
 
@@ -1205,12 +1214,12 @@ public class PartService {
         if (barcode == null || barcode.isBlank()) {
             return;
         }
-        List<String> taken = jdbc.queryForList(
-                "SELECT public_code FROM part WHERE barcode = ? AND id <> ?",
-                String.class, barcode.strip(), partId);
+        List<Long> taken = jdbc.queryForList(
+                "SELECT number FROM part WHERE barcode = ? AND id <> ?",
+                Long.class, barcode.strip(), partId);
         if (!taken.isEmpty()) {
             throw new IllegalArgumentException(
-                    "Штрихкод «%s» уже стоит у позиции %s".formatted(barcode.strip(), taken.get(0)));
+                    PartIdentity.occupied("Штрихкод", barcode.strip(), taken.get(0)));
         }
     }
 

@@ -310,6 +310,32 @@ class PartNumberSearchTest extends PostgresTestBase {
         assertThat(storefront("AAA" + SPOKEN + "9BBBBBB")).contains(decoyPart);
     }
 
+    /**
+     * Номер товара — порядковый номер, и пишут его так, как пишет экран
+     * и ориентир: «300 001», разряды неразрывным пробелом (задача 0366).
+     * Скопированное с карточки или продиктованное по разрядам обязано
+     * находить ту же позицию, что «300001», а старая этикетка с публичным
+     * кодом — по-прежнему находить свою.
+     */
+    @Test
+    @DisplayName("Номер товара разрядами и прежний публичный код находят позицию")
+    void groupedNumberAndOldPublicCodeFindThePart() {
+        Long grouped = inTenant(() -> {
+            jdbc.execute("SELECT setval('part_number_seq', 300000)");
+            return part("Фара без цифр для разрядов", "EEEEEEEEEEEE");
+        });
+        assertThat(numberOf(grouped)).isEqualTo(300001L);
+
+        for (String term : new String[] {"300001", "300 001", "300\u00a0001", "№ 300 001"}) {
+            assertThat(storefront(term)).as("витрина, «%s»", term).contains(grouped);
+            assertThat(seller(term)).as("продавец, «%s»", term).contains(grouped);
+        }
+        assertThat(storefront("EEEEEEEEEEEE")).as("витрина, прежний публичный код").contains(grouped);
+        assertThat(seller("eeeeeeeeeeee")).as("продавец, прежний публичный код").contains(grouped);
+        // Номер производителя из двух половин номером не становится.
+        assertThat(ru.partsflow.shared.PartNumberQuery.parse("81170 33670")).isNull();
+    }
+
     private List<Long> wheelIds() {
         return List.of(spokenWheel, noisyWheel);
     }

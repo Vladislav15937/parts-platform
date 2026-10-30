@@ -669,12 +669,12 @@ class CatalogServiceTest extends PostgresTestBase {
             return null;
         });
 
-        // Номер товара стоит второй колонкой: первой с задачи 0060 идёт
-        // «№ позиции» — тот номер, которым деталь называют вслух. Индекс
+        // Публичный код стоит второй колонкой: первой идёт «Номер товара» —
+        // порядковый номер, которым деталь называют вслух (задача 0366). Индекс
         // берётся из заголовка, а не числом: иначе следующая колонка,
         // добавленная в начало, снова сдвинет проверку молча.
         int at = CatalogService.exportHeader(inTenant(() -> catalog.warehouses()))
-                .indexOf("Номер товара");
+                .indexOf("Публичный код");
         var codes = rows.stream().map(row -> row.get(at)).toList();
         assertThat(codes).contains(codeOf(id)).doesNotContain(codeOf(other));
     }

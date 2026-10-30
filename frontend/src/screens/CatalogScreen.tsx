@@ -358,7 +358,7 @@ export function CatalogScreen({ rights, donorFilter = null, onDonorFilterUsed }:
           Поиск
           <input
             value={search}
-            placeholder="№ позиции, номер товара, наименование или номер детали"
+            placeholder="Номер товара, наименование или номер детали"
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && change({ q: search })}
           />

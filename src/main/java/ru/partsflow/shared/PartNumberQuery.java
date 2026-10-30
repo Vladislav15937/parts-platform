@@ -34,6 +34,12 @@ import java.util.regex.Pattern;
  * в журнале. Та же причина, по которой здесь же лежат {@code AuditedColumns}
  * и {@code RetailCustomer}.
  *
+ * <p><b>Разряды через пробел — тоже номер</b> (задача 0366): экраны пишут
+ * Номер товара так, как его пишет ориентир, — «300 001», с пробелом тысяч
+ * (неразрывным, как его ставит {@code toLocaleString('ru-RU')}), и именно эту
+ * строку копируют и диктуют. Группы — строго по три цифры: «81170 33670»
+ * (номер производителя из двух половин) номером не считается.
+ *
  * <p><b>Длина ограничена</b> восемнадцатью цифрами: «12345678901234567890»
  * номером быть не может (номера идут подряд от единицы), а {@code Long}
  * на нём переполнится. Такой запрос остаётся обычным текстом.
@@ -41,7 +47,11 @@ import java.util.regex.Pattern;
 public final class PartNumberQuery {
 
     /** Весь запрос целиком — иначе это не «позиция 347», а слово в описании. */
-    private static final Pattern NUMBER = Pattern.compile("^[№#]?\\s*(\\d{1,18})$");
+    private static final Pattern NUMBER = Pattern.compile(
+            "^[№#]?\\s*(\\d{1,18}|\\d{1,3}(?:[ \\u00A0\\u202F]\\d{3}){1,5})$");
+
+    /** Пробелы разрядов: обычный, неразрывный и узкий неразрывный. */
+    private static final Pattern GROUP_SPACE = Pattern.compile("[ \\u00A0\\u202F]");
 
     /**
      * Ветка `UNION` для витрины и для выдачи продавца — одна на обе.
@@ -68,6 +78,24 @@ public final class PartNumberQuery {
             "\n                          UNION SELECT id FROM part WHERE drom_ad_number = ?";
 
     private PartNumberQuery() {
+    }
+
+    /**
+     * Номер товара так, как его видит человек (задача 0366): «300 001»,
+     * разряды неразрывным пробелом — тем же, что ставит экран
+     * ({@code toLocaleString('ru-RU')}). Отказ, назвавший позицию иначе,
+     * чем список, заставлял бы сверять две записи одного числа; а набранное
+     * с этим пробелом находит {@link #parse}.
+     */
+    public static String format(long number) {
+        String plain = Long.toString(number);
+        StringBuilder out = new StringBuilder(plain.length() + plain.length() / 3);
+        int head = plain.length() % 3 == 0 ? 3 : plain.length() % 3;
+        out.append(plain, 0, head);
+        for (int at = head; at < plain.length(); at += 3) {
+            out.append('\u00A0').append(plain, at, at + 3);
+        }
+        return out.toString();
     }
 
     /**
@@ -107,7 +135,12 @@ public final class PartNumberQuery {
         if (!found.matches()) {
             throw new IllegalArgumentException("Запрос не является номером");
         }
-        return found.group(1);
+        return digits(found);
+    }
+
+    /** Цифры номера без пробелов разрядов: «300 001» → «300001». */
+    private static String digits(Matcher found) {
+        return GROUP_SPACE.matcher(found.group(1)).replaceAll("");
     }
 
     /**
@@ -126,6 +159,6 @@ public final class PartNumberQuery {
             return null;
         }
         Matcher found = NUMBER.matcher(raw.strip());
-        return found.matches() ? Long.valueOf(found.group(1)) : null;
+        return found.matches() ? Long.valueOf(digits(found)) : null;
     }
 }

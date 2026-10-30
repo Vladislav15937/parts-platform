@@ -101,22 +101,26 @@ public class StockDocumentService {
         List<SkippedItem> skipped = toMove == items
                 ? List.of()
                 : insufficient.stream()
-                        .map(item -> new SkippedItem(item.partId(), publicCodeOf(item.partId())))
+                        .map(item -> skippedOf(item.partId()))
                         .toList();
         return new MoveOutcome(completed, skipped);
     }
 
-    private String publicCodeOf(Long partId) {
-        return jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, partId);
+    private SkippedItem skippedOf(Long partId) {
+        return jdbc.queryForObject("SELECT public_code, number FROM part WHERE id = ?",
+                (rs, i) -> new SkippedItem(partId, rs.getString("public_code"), rs.getLong("number")),
+                partId);
     }
 
     /** Итог перевозки пачкой: сам документ и то, что в него не попало. */
     public record MoveOutcome(StockDocument document, List<SkippedItem> skipped) {
     }
 
-    /** Позиция, которая не поехала, потому что часть остатка обещана покупателю. */
-    public record SkippedItem(Long partId, String publicCode) {
+    /**
+     * Позиция, которая не поехала, потому что часть остатка обещана покупателю. Человеку её называет {@code number} — Номер товара
+     * (задача 0366); публичный код остаётся для прежних вкладок.
+     */
+    public record SkippedItem(Long partId, String publicCode, Long number) {
     }
 
     /**

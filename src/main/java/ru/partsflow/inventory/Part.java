@@ -42,6 +42,15 @@ public class Part {
     @Column(name = "public_code", insertable = false, updatable = false)
     private String publicCode;
 
+    /**
+     * Номер товара — порядковый номер, которым позицию называют вслух и по
+     * которому её находят (задача 0366). Только для чтения: раздаёт его база
+     * при вставке, а правки он не принимает вовсе ({@code PartIdentity.numberLocked}).
+     */
+    @Generated(event = EventType.INSERT)
+    @Column(name = "number", insertable = false, updatable = false)
+    private Long number;
+
     @Column(name = "donor_id")
     private Long donorId;
 
@@ -292,6 +301,15 @@ public class Part {
 
     public String getPublicCode() {
         return publicCode;
+    }
+
+    public Long getNumber() {
+        return number;
+    }
+
+    /** Номер товара словами экрана — «300 001»; для отказов, называющих позицию. */
+    public String shownNumber() {
+        return number == null ? "—" : ru.partsflow.shared.PartNumberQuery.format(number);
     }
 
     public Long getDonorId() {
