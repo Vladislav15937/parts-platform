@@ -297,9 +297,9 @@ public class TitleRecount {
                 + (skipped.formula() == null ? "" : "; формула дала бы «" + skipped.formula() + "»"));
     }
 
-    /** «№ позиции и код» — по ним позицию находят на витрине; номер строки базы не годится. */
+    /** Номер товара — по нему позицию находят на витрине; номер строки базы не годится (задача 0366). */
     private static String name(Position position) {
-        return "№ позиции " + position.number() + ", код " + position.code();
+        return "номер товара " + ru.partsflow.shared.PartNumberQuery.format(position.number());
     }
 
     private static <E extends Enum<E>> E enumOf(Class<E> type, String value) {

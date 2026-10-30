@@ -1,3 +1,4 @@
+import { partNumber } from '../inventory/partNumber';
 import { useEffect, useState } from 'react';
 import { count, plural, shown } from '../ui/plural';
 import { ApiError } from '../api/client';
@@ -874,11 +875,10 @@ export function ReportsScreen({ canRead }: Props) {
               <tr>
                 <th>Дата выдачи</th>
                 <th>Сделка</th>
-                {/* Номер позиции (задача 0168): «на чём мы теряем» владелец
+                {/* Номер товара (задачи 0168, 0366): «на чём мы теряем» владелец
                     выясняет здесь, а дальше называет позицию работнику
-                    вслух — публичный код для этого не годится. */}
-                <th className="num">№ позиции</th>
-                <th>Номер товара</th>
+                    вслух. Шестнадцатеричного кода рядом больше нет. */}
+                <th className="num">Номер товара</th>
                 <th>Наименование</th>
                 <th>Состояние</th>
                 <th className="num">Цена продажи</th>
@@ -896,8 +896,7 @@ export function ReportsScreen({ canRead }: Props) {
                 <tr key={row.itemId}>
                   <td>{dayOf(row.soldAt)}</td>
                   <td>{row.dealNumber}</td>
-                  <td className="num">{row.number}</td>
-                  <td>{row.publicCode ?? '—'}</td>
+                  <td className="num">{partNumber(row.number)}</td>
                   {/* Номер производителя за наименованием (задача 0329); в файле
                       он своей колонкой — там по колонкам сортируют. */}
                   <td>{row.title}<OemWord number={row.primaryOem} /></td>
@@ -1075,14 +1074,11 @@ export function ReportsScreen({ canRead }: Props) {
               <table className="report">
                 <thead>
                   <tr>
-                    {/* Порядковый номер первым, как на витрине склада
-                        и на вкладке колёс: владелец, увидев позицию здесь,
-                        называет её работнику вслух. Соседняя колонка
-                        называется «Номер товара» тем же словом, что везде, —
-                        рядом с «№ позиции» прежнее «Номер» не говорит,
-                        какой из двух номеров в ней стоит. */}
-                    <th className="num">№ позиции</th>
-                    <th>Номер товара</th>
+                    {/* Номер товара первым, как на витрине склада и на вкладке
+                        колёс: владелец, увидев позицию здесь, называет её
+                        работнику вслух (задача 0366: одна колонка, порядковый
+                        номер, как у ориентира). */}
+                    <th className="num">Номер товара</th>
                     <th>Тип запчасти</th>
                     <th>Наименование</th>
                     {/* Столбцом, как в «Проданных позициях» (задача 0318):
@@ -1102,8 +1098,7 @@ export function ReportsScreen({ canRead }: Props) {
                 <tbody>
                   {items.map((row) => (
                     <tr key={row.partId}>
-                      <td className="num">{row.number}</td>
-                      <td>{row.publicCode ?? '—'}</td>
+                      <td className="num">{partNumber(row.number)}</td>
                       {/* Прочерк, а не пусто: наименование не распознано,
                           и это правда о карточке. */}
                       <td>{row.kind ?? '—'}</td>

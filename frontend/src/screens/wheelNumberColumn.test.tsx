@@ -69,27 +69,27 @@ describe('номер позиции на вкладке «Шины и диски
     vi.unstubAllGlobals();
   });
 
-  it('колонка «№ позиции» есть, и в ней стоит номер этой позиции', async () => {
+  it('колонка «Номер товара» есть, и в ней стоит номер этой позиции', async () => {
     render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText(/Goodyear/)).toBeTruthy());
 
     const headers = Array.from(document.querySelectorAll('thead th'))
       .map((cell) => (cell.textContent ?? '').trim());
-    const at = headers.findIndex((title) => title.startsWith('№ позиции'));
+    const at = headers.findIndex((title) => title.startsWith('Номер товара'));
     expect(
       at,
-      `колонки «№ позиции» на вкладке нет: ${headers.join(' · ')}`,
+      `колонки «Номер товара» на вкладке нет: ${headers.join(' · ')}`,
     ).toBeGreaterThanOrEqual(0);
 
     // Первой, как на витрине склада: два соседних экрана, показывающих
     // один и тот же номер в разных местах, читаются как разные числа.
-    expect(at, 'колонка «№ позиции» стоит не первой').toBe(0);
+    expect(at, 'колонка «Номер товара» стоит не первой').toBe(0);
 
     const cells = Array.from(document.querySelectorAll('tbody tr td'))
       .map((cell) => (cell.textContent ?? '').trim());
     expect(
       cells[at],
-      'в колонке «№ позиции» стоит не номер позиции',
+      'в колонке «Номер товара» стоит не номер товара',
     ).toBe('347');
   });
 

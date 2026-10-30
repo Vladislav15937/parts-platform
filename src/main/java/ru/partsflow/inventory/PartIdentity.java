@@ -151,22 +151,8 @@ public class PartIdentity {
         List<String> sets = new ArrayList<>();
         List<Object> args = new ArrayList<>();
 
-        Long number = edit.number() == null ? null : numberOf(edit.number());
-        if (number != null && !number.equals(was.number())) {
-            claimNumber(partId, number);
-            column("number", was.number(), number, before, after, sets, args);
-        }
-        if (edit.code() != null) {
-            String code = edit.code().strip();
-            if (code.isEmpty()) {
-                throw new IllegalArgumentException("Номер товара не может быть пустым: по нему"
-                        + " позицию находят на витрине, на этикетке и сканером");
-            }
-            if (!code.equals(was.code())) {
-                requireFree(partId, "public_code", code, "Номер товара");
-                column("public_code", was.code(), code, before, after, sets, args);
-            }
-        }
+        // Номер товара и публичный код здесь не пишутся (задача 0366): правку,
+        // меняющую их, отбивает PartService.update до записи ({@link #numberLocked}).
         text("authenticity", was.authenticity(), edit.authenticity(), before, after, sets, args);
         if (edit.dromAdNumber() != null) {
             String ad = dromAdNumber(edit.dromAdNumber());
@@ -211,6 +197,36 @@ public class PartIdentity {
         }
         journal.changed("part", partId, before, after);
         return applied;
+    }
+
+    /** Отказ на правку номера товара (задача 0366) — его же слова у замка в форме правки. */
+    static final String NUMBER_LOCKED = "«Номер товара» присваивает система, и он не правится:"
+            + " его называют вслух, он напечатан на этикетке и стоит номером объявления на Дроме.";
+
+    /** Отказ на правку публичного кода (задача 0366): поля на экране нет, прислать его может только прежняя вкладка. */
+    static final String CODE_LOCKED = "Публичный код позиции не правится: он напечатан"
+            + " на прежних этикетках, и по нему их находит сканер. Обновите страницу.";
+
+    /**
+     * Хочет ли правка поменять номер товара или публичный код (задача 0366,
+     * решение владельца продукта 19.10.2026 «Всё как у bazon»: у ориентира
+     * «Номер товара» в форме правки серый, с замком). Ключ без значения
+     * и значение, равное лежащему, правкой не считаются.
+     *
+     * @return слова отказа; {@code null} — менять нечего
+     */
+    static String numberLocked(Values was, Edit edit) {
+        if (edit == null) {
+            return null;
+        }
+        if (edit.number() != null
+                && !edit.number().equals(java.math.BigInteger.valueOf(was.number()))) {
+            return NUMBER_LOCKED;
+        }
+        if (edit.code() != null && !edit.code().strip().equals(was.code())) {
+            return CODE_LOCKED;
+        }
+        return null;
     }
 
     /**
@@ -361,13 +377,6 @@ public class PartIdentity {
     @Transactional(readOnly = true)
     public void explainConflict(Long partId, Edit edit, String barcode, String legacyCode,
                                 DataIntegrityViolationException original) {
-        if (edit.number() != null && edit.number().signum() > 0
-                && edit.number().compareTo(java.math.BigInteger.valueOf(NUMBER_MAX)) <= 0) {
-            requireNumberFree(partId, edit.number().longValueExact());
-        }
-        if (edit.code() != null && !edit.code().isBlank()) {
-            requireFree(partId, "public_code", edit.code().strip(), "Номер товара");
-        }
         if (edit.dromAdNumber() != null && !edit.dromAdNumber().isBlank()) {
             String ad = dromAdNumber(edit.dromAdNumber());
             if (ad != null) {
@@ -384,22 +393,28 @@ public class PartIdentity {
     }
 
     /**
-     * Занятое значение называет позицию публичным кодом — по нему её находят
-     * на витрине, — а не номером строки базы (правило корневого CLAUDE.md,
-     * «Штрихкод, занятый другой позицией»).
+     * Занятое значение называет позицию Номером товара — по нему её находят
+     * на витрине и называют вслух (задача 0366; до неё — публичным кодом),
+     * — а не номером строки базы (правило корневого CLAUDE.md, «Штрихкод,
+     * занятый другой позицией»).
      */
     void requireFree(Long partId, String column, String value, String label) {
-        List<String> taken = jdbc.queryForList(
-                "SELECT public_code FROM part WHERE " + column + " = ? AND id <> ?",
-                String.class, value, partId);
+        List<Long> taken = jdbc.queryForList(
+                "SELECT number FROM part WHERE " + column + " = ? AND id <> ?",
+                Long.class, value, partId);
         if (!taken.isEmpty()) {
-            throw new IllegalStateException("%s «%s» уже стоит у позиции %s — найдите её"
-                    .formatted(label, value, taken.get(0)) + " на витрине по этому коду");
+            throw new IllegalStateException(occupied(label, value, taken.get(0)));
         }
     }
 
+    /** «Штрихкод «…» уже стоит у позиции с номером товара 300 001 — найдите её на витрине по этому номеру». */
+    static String occupied(String label, String value, long number) {
+        return "%s «%s» уже стоит у позиции с номером товара %s — найдите её на витрине по этому номеру"
+                .formatted(label, value, ru.partsflow.shared.PartNumberQuery.format(number));
+    }
+
     /**
-     * Наибольший «№ позиции» — граница типа, а не запрет (задача 0303).
+     * Наибольший Номер товара — граница типа, а не запрет (задача 0303).
      *
      * <p>Колонка и последовательность — {@code bigint}, до 9 223 372 036 854 775 807,
      * но номер показывают экраны, а число в браузере точно только до
@@ -410,90 +425,6 @@ public class PartIdentity {
      */
     public static final long NUMBER_MAX = 9_007_199_254_740_991L;
 
-    /**
-     * Номер из запроса: целое больше нуля и не больше {@link #NUMBER_MAX}.
-     * Приходит {@code BigInteger}, а не {@code Long}: номер за пределом
-     * {@code long} иначе отбил бы разбор тела, и человек прочитал бы
-     * «запрос не разобран» вместо причины.
-     */
-    private static Long numberOf(java.math.BigInteger number) {
-        if (number.signum() <= 0) {
-            throw new IllegalArgumentException("№ позиции — целое число больше нуля");
-        }
-        if (number.compareTo(java.math.BigInteger.valueOf(NUMBER_MAX)) > 0) {
-            throw new IllegalArgumentException(("№ позиции %s больше наибольшего возможного"
-                    + " (9 007 199 254 740 991): такое число экран не покажет точно,"
-                    + " и позицию назовут другим номером").formatted(number));
-        }
-        return number.longValueExact();
-    }
-
-    /**
-     * Занимает номер, вписанный руками, и двигает за ним нумерацию.
-     *
-     * <p><b>Предела «не дальше 100 000» больше нет</b> (задача 0303, решение
-     * владельца продукта 15.10.2026: снять). Он стоял из-за скорости: PR 440
-     * продвигал последовательность шагами {@code nextval}, и миллионы шагов
-     * занимали минуты. Теперь сдвиг — одна инструкция {@code setval}; рабочей
-     * роли на неё выдан {@code UPDATE} одной этой последовательности
-     * ({@code SchemaGrants}).
-     *
-     * <p><b>Гонка с приёмкой закрыта блокировкой таблицы, а не надеждой.</b>
-     * Номер выше выданных — это номер, который приёмка выдаст следующим.
-     * Между проверкой «свободен» и сдвигом нумерации приёмка успела бы взять
-     * его же, и одна из двух операций получила бы отказ уникального индекса —
-     * хуже всего приёмка, которую телефон уведёт в «требует внимания».
-     * {@code SHARE ROW EXCLUSIVE} на {@code part} пропускает чтение и ждёт
-     * всех, кто в эту таблицу пишет: начатые приёмки дописываются и становятся
-     * видны проверке, новые ждут конца правки (миллисекунды) и получают номер
-     * уже после вписанного. Две такие правки тоже идут по очереди: вторая
-     * увидит номер первой и ответит словами.
-     *
-     * <p>Номер не выше выданных блокировки не требует: нумерация его уже
-     * прошла, и столкнуться с ним может только существующая позиция — её
-     * ловит проверка, а одновременную — уникальный индекс ({@link #explainConflict}).
-     */
-    private void claimNumber(Long partId, long number) {
-        if (number > lastIssued()) {
-            lockNumbering();
-            requireNumberFree(partId, number);
-            // Под блокировкой нумерацию никто не двигает, но перечитать
-            // дешевле, чем полагаться: setval назад раздал бы номера второй раз.
-            jdbc.queryForObject("SELECT setval('part_number_seq', greatest(?,"
-                    + " (SELECT last_value FROM part_number_seq)))", Long.class, number);
-        } else {
-            requireNumberFree(partId, number);
-        }
-    }
-
-    private void lockNumbering() {
-        try {
-            jdbc.execute("LOCK TABLE part IN SHARE ROW EXCLUSIVE MODE");
-        } catch (org.springframework.dao.PessimisticLockingFailureException busy) {
-            // lock_timeout (5 с) — склад держит долгая запись: перенос, правка
-            // списком. Повтор через минуту пройдёт; пятисотка увела бы искать
-            // поломку сервера.
-            throw new IllegalStateException("Нумерацию позиций сейчас занимает другая операция"
-                    + " со складом (перенос или правка списком) — сохраните № позиции"
-                    + " ещё раз через минуту", busy);
-        }
-    }
-
-    private void requireNumberFree(Long partId, Long number) {
-        List<String> taken = jdbc.queryForList(
-                "SELECT public_code FROM part WHERE number = ? AND id <> ?",
-                String.class, number, partId);
-        if (!taken.isEmpty()) {
-            throw new IllegalStateException(("№ позиции %d уже у позиции %s — найдите её"
-                    + " на витрине по этому коду").formatted(number, taken.get(0)));
-        }
-    }
-
-    private Long lastIssued() {
-        return jdbc.queryForObject(
-                "SELECT CASE WHEN is_called THEN last_value ELSE last_value - 1 END"
-                        + " FROM part_number_seq", Long.class);
-    }
 
     /**
      * Номер производителя и каждый кросс-номер не длиннее, чем можно сохранить

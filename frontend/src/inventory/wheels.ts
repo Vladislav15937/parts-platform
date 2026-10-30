@@ -1,3 +1,4 @@
+import { PART_NUMBER_TITLE, partNumber } from './partNumber';
 import { request } from '../api/client';
 import { CONDITION } from './catalog';
 import type { CatalogRow } from './catalog';
@@ -432,9 +433,11 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
   // а «позиция 347», названная по телефону, обязана значить одно и то же
   // на обоих. Отбора по нему нет — тридцать пять тысяч значений в списке
   // не выбирают, — поэтому `filter: false`, как у «Создан».
-  { key: 'number', title: '№ позиции', sort: 'number', numeric: true, filter: false,
-    value: (w) => text(w.number) },
-  { key: 'code', title: 'Номер товара', sort: 'code', value: (w) => text(w.publicCode) },
+  // «Номер товара» — порядковый номер, как на складе и у ориентира (задача 0366);
+  // шестнадцатеричный код — «Публичный код», по умолчанию не показан.
+  { key: 'number', title: PART_NUMBER_TITLE, sort: 'number', numeric: true, filter: false,
+    value: (w) => partNumber(w.number) },
+  { key: 'code', title: 'Публичный код', sort: 'code', value: (w) => text(w.publicCode) },
   // Вторым столбцом, как в кабинете: колесо узнают по картинке — диски
   // различаются только рисунком, и словами его не опишешь.
   { key: 'photo', title: 'Превью', fixed: true, filter: false, value: () => '',
@@ -507,22 +510,33 @@ export const WHEEL_COLUMNS: WheelColumn[] = [
  * остальное владелец включает сам, и выбор запоминается.
  */
 export const WHEEL_DEFAULT_VISIBLE = [
-  'number', 'code', 'photo', 'set', 'setPieces', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
+  'number', 'photo', 'set', 'setPieces', 'kind', 'diameter', 'tyreWidth', 'tyreHeight',
   'season', 'wear', 'tyreBrand', 'tyreModel', 'price', 'section',
 ];
 
-const WHEEL_STORAGE_KEY = 'wheel-columns';
+/**
+ * Ключ сменён задачей 0366: прежняя запись держит `code` включённым (тогда
+ * колонка звалась «Номер товара» и стояла в умолчании), и при первом чтении
+ * его снимаем; включённое после 0366 живёт под новым ключом и не снимается.
+ */
+const WHEEL_STORAGE_KEY = 'wheel-columns-0366';
+const WHEEL_STORAGE_KEY_BEFORE_0366 = 'wheel-columns';
 
 export function loadWheelVisible(): string[] {
   try {
-    const saved = localStorage.getItem(WHEEL_STORAGE_KEY);
+    const current = localStorage.getItem(WHEEL_STORAGE_KEY);
+    const saved = current ?? localStorage.getItem(WHEEL_STORAGE_KEY_BEFORE_0366);
     if (saved === null) {
       return WHEEL_DEFAULT_VISIBLE;
     }
     const parsed: unknown = JSON.parse(saved);
-    return Array.isArray(parsed) && parsed.every((k) => typeof k === 'string')
-      ? (parsed as string[])
-      : WHEEL_DEFAULT_VISIBLE;
+    if (!Array.isArray(parsed) || !parsed.every((k) => typeof k === 'string')) {
+      return WHEEL_DEFAULT_VISIBLE;
+    }
+    const keys = current === null
+      ? (parsed as string[]).filter((k) => k !== 'code')
+      : (parsed as string[]);
+    return keys.length > 0 ? keys : WHEEL_DEFAULT_VISIBLE;
   } catch {
     // Испорченная запись — не повод показать пустую таблицу.
     return WHEEL_DEFAULT_VISIBLE;

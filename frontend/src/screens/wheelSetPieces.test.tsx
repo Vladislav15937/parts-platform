@@ -60,7 +60,7 @@ describe('штук в комплекте на вкладке «Шины и ди�
 
   it('колонка «Штук в комплекте» видна по умолчанию, и под ней число штук этой позиции', async () => {
     render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
-    await waitFor(() => expect(screen.getByText('W1A2B3C4D5E6')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('347')).toBeTruthy());
 
     const headers = Array.from(document.querySelectorAll('thead th'))
       .map((cell) => (cell.textContent ?? '').trim());
@@ -75,9 +75,9 @@ describe('штук в комплекте на вкладке «Шины и ди�
 
   it('в карточке строка «Штук в комплекте» — «3 шт»', async () => {
     render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
-    await waitFor(() => expect(screen.getByText('W1A2B3C4D5E6')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('347')).toBeTruthy());
 
-    fireEvent.click(screen.getByText('W1A2B3C4D5E6').closest('tr') as HTMLElement);
+    fireEvent.click(screen.getByText('347').closest('tr') as HTMLElement);
     await waitFor(() => expect(document.querySelector('dl')).not.toBeNull());
 
     const pairs = Array.from(document.querySelectorAll('dt')).map((dt) => [

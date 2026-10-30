@@ -42,7 +42,7 @@ describe('сведение расхождений называет позици�
     vi.unstubAllGlobals();
   });
 
-  it('колонка «№ позиции» стоит первой, и в ней номер этой позиции', async () => {
+  it('колонка «Номер товара» стоит первой, и в ней номер этой позиции', async () => {
     render(<InventoryReconcile reference={reference()} />);
 
     // «Выполненные» накрывает и завершённый подсчёт, и проведённый: расхождения
@@ -59,18 +59,18 @@ describe('сведение расхождений называет позици�
     const headers = [...table.querySelectorAll('thead th')]
       .map((cell) => (cell.textContent ?? '').trim());
 
-    const at = headers.indexOf('№ позиции');
+    const at = headers.indexOf('Номер товара');
     expect(
       at,
-      `колонки «№ позиции» в расхождениях нет: ${headers.join(' · ')}`,
+      `колонки «Номер товара» в расхождениях нет: ${headers.join(' · ')}`,
     ).toBeGreaterThanOrEqual(0);
-    expect(at, 'колонка «№ позиции» стоит не первой').toBe(0);
+    expect(at, 'колонка «Номер товара» стоит не первой').toBe(0);
 
     const cells = [...screen.getByText('Фара левая').closest('tr')!.querySelectorAll('td')]
       .map((cell) => (cell.textContent ?? '').trim());
     expect(
       cells[at],
-      'в колонке «№ позиции» стоит не номер позиции',
+      'в колонке «Номер товара» стоит не номер товара',
     ).toBe('347');
   });
 });

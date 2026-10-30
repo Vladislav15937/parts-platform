@@ -46,11 +46,11 @@ export function CatalogLabelDialog({ total, rows, failure, onSend, onCancel }: {
   const problem = mode === 'given' ? copiesProblem(given, GIVEN_FIELD) : null;
   const perItem = problem === null && mode === 'given' ? Number(given.trim()) : 1;
 
-  // Без номера товара печатать нечего: он и кодируется штрихкодом.
-  const coded = (rows ?? []).filter((row) => row.code !== null && row.code !== '');
+  // Без номера товара печатать нечего: он и кодируется штрихкодом (задача 0366).
+  const coded = (rows ?? []).filter((row) => row.number !== null && row.number !== undefined);
   const uncoded = (rows ?? []).length - coded.length;
   const items = coded.map((row) => ({
-    label: partLabel(row.code!, row.title, row.price, row.condition),
+    label: partLabel(row.number, row.title, row.price, row.condition),
     copies: copiesOf(mode, Number(row.qty), perItem),
   }));
   const empty = mode === 'stock' ? items.filter((item) => item.copies === 0).length : 0;

@@ -28,8 +28,10 @@ final class PartEditValues {
      * и руками не правится (задача 0336): присланное другое — отказ. «Текстовый блок»
      * (текст) — след выбора блока {@code textBlockId} (задача 0337): выбор копирует
      * в него текст, и «одно поле — меняется одно» к паре неприменимо.
+     * Номер товара и публичный код с задачи 0366 не правятся вовсе: присланное
+     * другое — отказ словами ({@code PartNumberLockTest}).
      */
-    static final Set<String> NOT_A_FIELD = Set.of("priceOp", "title", "textBlock");
+    static final Set<String> NOT_A_FIELD = Set.of("priceOp", "title", "textBlock", "number", "code");
 
     private final ObjectMapper json;
     private final String suffix;
@@ -99,8 +101,6 @@ final class PartEditValues {
         v.put("mayFit", "Toyota Mark X");
         v.put("adDate", "2026-09-28");
         v.put("priceOp", "SET");
-        v.put("number", number);
-        v.put("code", "CODE1-" + suffix);
         v.put("sideLr", "LEFT");
         v.put("sideFr", "FRONT");
         v.put("authenticity", "Оригинал");
@@ -157,8 +157,6 @@ final class PartEditValues {
         v.put("characteristics", "Цвет: белый");
         v.put("mayFit", "Toyota Windom");
         v.put("adDate", "2026-10-01");
-        v.put("number", number + 1);
-        v.put("code", "CODE2-" + suffix);
         v.put("sideLr", "RIGHT");
         v.put("sideFr", "REAR");
         v.put("authenticity", "Копия");

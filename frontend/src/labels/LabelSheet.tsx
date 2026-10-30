@@ -48,11 +48,21 @@ export function LabelSheet({ labels }: { labels: Label[] }) {
 }
 
 function LabelCard({ label }: { label: Label }) {
+  if (label.kind === 'part') {
+    // Номер товара крупно и в штрихкоде (задача 0366): по нему деталь называют
+    // и ищут, и набирают руками, когда затёртый штрихкод сканер не берёт.
+    return (
+      <article className="label">
+        <div className="label-title label-title--big">{label.number}</div>
+        <div className="label-title label-title--name">{label.title}</div>
+        {label.note !== null && <div className="label-note">{label.note}</div>}
+        <Barcode value={label.code} />
+      </article>
+    );
+  }
   return (
     <article className="label">
-      <div className={label.kind === 'cell' ? 'label-title label-title--big' : 'label-title'}>
-        {label.title}
-      </div>
+      <div className="label-title label-title--big">{label.title}</div>
       {label.note !== null && <div className="label-note">{label.note}</div>}
       {/* Непечатаемый код не роняет лист: раньше исключение из кодировщика
           прилетало прямо в render, и экран целиком уходил в белый лист —

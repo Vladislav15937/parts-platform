@@ -80,6 +80,9 @@ export function HomeScreen() {
   // продажи открывает её карточкой, как при поиске «Найти сделку клиента»,
   // а не заводит второй способ показать документ.
   const [openDealId, setOpenDealId] = useState<number | null>(null);
+  // «N запчастей — Посмотреть» с карточки машины: номер машины едет на склад
+  // тем же приёмом, что номер сделки на продажу, — состоянием оболочки.
+  const [donorFilter, setDonorFilter] = useState<string | null>(null);
   // Почему это общий хук, а не ref с эффектом на месте, — в ui/useMounted.ts.
   const mounted = useMounted();
 
@@ -247,6 +250,10 @@ export function HomeScreen() {
             reference={status.reference}
             online={connected}
             canExpect={rights.has('supply.expected')}
+            onDonorParts={(donorCode) => {
+              setDonorFilter(donorCode);
+              setTab('catalog');
+            }}
             onChanged={() => {
               // Справочники приёмки перечитаются сами: машина попадает
               // в список на экране деталей, когда её ставят в разбор.
@@ -315,7 +322,10 @@ export function HomeScreen() {
         />
       )}
 
-      {!locked && tab === 'catalog' && <CatalogScreen rights={rights} />}
+      {!locked && tab === 'catalog' && (
+        <CatalogScreen rights={rights} donorFilter={donorFilter}
+                       onDonorFilterUsed={() => setDonorFilter(null)} />
+      )}
 
       {!locked && tab === 'wheels' && (
         <WheelsScreen canIntake={rights.has('wheels.set')}

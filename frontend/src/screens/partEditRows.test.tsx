@@ -212,7 +212,8 @@ describe('правка карточки по одному полю', () => {
     const rows = [...document.querySelectorAll('.card-edit__row')];
     // Наименования в списке нет: с задачи 0336 оно производное и в форме
     // не стоит вовсе (как у Bazon), — это не замок, а отсутствие поля.
-    for (const label of ['№ позиции', 'Номер товара', 'Состояние',
+    // Кроме номера товара: он под замком всегда (задача 0366, тест ниже).
+    for (const label of ['Состояние',
       'Передний / Задний', 'Левый / Правый', 'Оригинальность', 'Номер производителя',
       'Кросс-номера', 'Номер донора', 'Марка', 'Модель', 'Модель кузова',
       'Модель двигателя', 'Год выпуска', 'Комплектация', 'Поколение', 'Старые данные',
@@ -222,10 +223,36 @@ describe('правка карточки по одному полю', () => {
     }
     for (const r of rows) {
       const label = r.querySelector('.card-edit__label')?.textContent ?? '';
+      if (label === 'Номер товара') continue;
       expect(r.textContent, `у «${label}» стоит замок`).not.toContain('🔒');
       expect(r.querySelector('button'), `у «${label}» нет «Изменить»`).not.toBeNull();
     }
     expect(document.body.textContent).not.toContain('система ведёт сама');
+  });
+
+  /**
+   * Номер товара — серая строка с замком (задача 0366, «Всё как у bazon»).
+   *
+   * <p>Его называют вслух, он напечатан на этикетке и стоит номером
+   * объявления на Дроме — правка его рвала бы все три связи. Прежняя форма
+   * давала «Изменить» у «№ позиции» и у «Номера товара» (тогда так звался
+   * публичный код) и слала оба на сервер.
+   */
+  it('номер товара под замком: виден разрядами, «Изменить» нет, публичного кода в форме нет', async () => {
+    render(<PartEditForm partId={7} row={row()}
+                         onSaved={() => {}} onCancel={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Изменить: Цена')).toBeTruthy());
+
+    const number = line('Номер товара');
+    expect(number.textContent?.replace(/\u00a0/g, ' '), 'номер товара не показан разрядами')
+      .toContain('300 001');
+    expect(screen.queryByLabelText('Изменить: Номер товара'), 'номер товара правится')
+      .toBeNull();
+    expect(number.className, 'строка номера не серая').toContain('card-edit__row--locked');
+    expect(within(number).getByRole('img', { name: 'Номер товара: присваивает система, не правится' }))
+      .toBeTruthy();
+    expect(document.body.textContent, 'публичный код показан в форме').not.toContain('B-40219');
+    expect(screen.queryByText('№ позиции'), 'осталась строка «№ позиции»').toBeNull();
   });
 
   it('номер производителя вписывается и уезжает, нераскрытые новые поля не уезжают', async () => {
@@ -652,7 +679,7 @@ function card(): Record<string, unknown> {
     mayFit: MAY_FIT,
     adDate: '2026-09-28',
     // Задача 0302: то, что раньше стояло с замком. Машины своей у позиции нет.
-    number: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
+    number: 300001, code: 'B-40219', title: 'Фара левая Toyota Camry',
     sideLr: 'LEFT', sideFr: 'FRONT', authenticity: null, oem: null, crosses: null,
     legacyCode: null, dromAdNumber: null, donorCode: null, brand: null, model: null,
     generation: null, body: null, engine: null, year: null, equipment: null,
@@ -661,7 +688,7 @@ function card(): Record<string, unknown> {
 
 function row(): CatalogRow {
   return {
-    id: 7, number: 7, code: 'B-40219', title: 'Фара левая Toyota Camry',
+    id: 7, number: 300001, code: 'B-40219', title: 'Фара левая Toyota Camry',
     qualityGrade: 'NO_DEFECTS', condition: 'USED',
     brand: 'Toyota', model: 'Camry', generation: null, yearFrom: null, yearTo: null,
     body: null, engine: null, year: 2007, donorCode: '261',
