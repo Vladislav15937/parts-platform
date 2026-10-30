@@ -22,32 +22,7 @@ export function PartDonorView({ donor, onParts }: {
     return <p className="muted">Загружаем…</p>;
   }
 
-  const rows: Array<[string, string]> = [];
-  const add = (label: string, value: string | number | null) => {
-    if (value !== null && String(value).trim() !== '') {
-      rows.push([label, String(value)]);
-    }
-  };
-
-  add('Номер машины', donor.code);
-  add('Состояние', donor.status);
-  add('Поставка', donor.supply);
-  add('Марка', donor.brand);
-  add('Модель', donor.model);
-  add('Поколение', donor.generation);
-  add('Кузов', donor.bodyCode);
-  add('Двигатель', donor.engineCode);
-  add('Год выпуска', donor.year);
-  add('Расположение руля', donor.steering);
-  add('КПП', donor.transmission);
-  add('Привод', donor.driveType);
-  add('Цвет', donor.color);
-  add('Комплектация', donor.equipmentCode);
-  // Пробег с разделителями разрядов: «158475» глазами не читается.
-  add('Пробег, км', donor.mileageKm === null ? null : donor.mileageKm.toLocaleString('ru-RU'));
-  add('VIN', donor.vin);
-  add('Где стоит', donor.location);
-  add('Примечание', donor.note);
+  const rows = donorRows(donor);
 
   return (
     <div className="donor-view">
@@ -75,3 +50,38 @@ export function PartDonorView({ donor, onParts }: {
   );
 }
 
+
+/**
+ * Строки машины словами, пустые пропущены. Одни на карточку позиции и на
+ * карточку самой машины (задача 0364): одну машину два экрана обязаны
+ * называть одинаково, а две копии списка разошлись бы на первом новом поле.
+ */
+export function donorRows(donor: PartDonor): Array<[string, string]> {
+  const rows: Array<[string, string]> = [];
+  const add = (label: string, value: string | number | null) => {
+    if (value !== null && String(value).trim() !== '') {
+      rows.push([label, String(value)]);
+    }
+  };
+
+  add('Номер машины', donor.code);
+  add('Состояние', donor.status);
+  add('Поставка', donor.supply);
+  add('Марка', donor.brand);
+  add('Модель', donor.model);
+  add('Поколение', donor.generation);
+  add('Кузов', donor.bodyCode);
+  add('Двигатель', donor.engineCode);
+  add('Год выпуска', donor.year);
+  add('Расположение руля', donor.steering);
+  add('КПП', donor.transmission);
+  add('Привод', donor.driveType);
+  add('Цвет', donor.color);
+  add('Комплектация', donor.equipmentCode);
+  // Пробег с разделителями разрядов: «158475» глазами не читается.
+  add('Пробег, км', donor.mileageKm === null ? null : donor.mileageKm.toLocaleString('ru-RU'));
+  add('VIN', donor.vin);
+  add('Где стоит', donor.location);
+  add('Примечание', donor.note);
+  return rows;
+}
