@@ -1,3 +1,4 @@
+import { partNumber } from '../inventory/partNumber';
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import type { PermissionKey, Rights } from '../access/rights';
 import { LockedAction } from '../ui/LockedAction';
@@ -252,13 +253,10 @@ export function StockMovesScreen({ rights }: { rights: Rights }) {
                             <table className="report">
                               <thead>
                                 <tr>
-                                  {/* Номер позиции (задача 0168): состав
+                                  {/* Номер товара (задачи 0168, 0366): состав
                                       документа открывают, чтобы назвать
-                                      увезённое вслух. «Номер товара» —
-                                      то же слово, каким публичный код зовут
-                                      на витрине и в карточке. */}
-                                  <th className="num">№ позиции</th>
-                                  <th>Номер товара</th>
+                                      увезённое вслух. */}
+                                  <th className="num">Номер товара</th>
                                   <th>Наименование</th>
                                   {/* Состояние столбцом (задача 0318):
                                       принимающий сверяет, та ли деталь
@@ -274,8 +272,7 @@ export function StockMovesScreen({ rights }: { rights: Rights }) {
                                     className="row--clickable"
                                     onClick={() => void openPart(line.publicCode)}
                                   >
-                                    <td className="num">{line.number}</td>
-                                    <td>{line.publicCode}</td>
+                                    <td className="num">{partNumber(line.number)}</td>
                                     {/* Номер производителя (задача 0329):
                                         принимающий сверяет по нему деталь. */}
                                     <td>{line.title}<OemWord number={line.primaryOem} /></td>

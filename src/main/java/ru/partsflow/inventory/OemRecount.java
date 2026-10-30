@@ -667,8 +667,9 @@ public class OemRecount {
     }
 
     /**
-     * «№ позиции и код» позиций с разделёнными строками — для списка, который человек
-     * просматривает до запуска: по номеру строки базы позицию на витрине не найти.
+     * Номер товара позиций с разделёнными строками — для списка, который человек
+     * просматривает до запуска: по номеру строки базы позицию на витрине не найти
+     * (задача 0366: публичного кода в словах человеку больше нет).
      */
     private static Map<Long, String> names(JdbcTemplate jdbc, List<PartPlan> plans) {
         List<Long> ids = plans.stream().filter(p -> !p.splits().isEmpty() && !p.cycle())
@@ -676,10 +677,10 @@ public class OemRecount {
         Map<Long, String> names = new LinkedHashMap<>();
         for (int from = 0; from < ids.size(); from += FETCH) {
             List<Long> chunk = ids.subList(from, Math.min(ids.size(), from + FETCH));
-            jdbc.query("SELECT id, number, public_code FROM part WHERE id = ANY (?)",
+            jdbc.query("SELECT id, number FROM part WHERE id = ANY (?)",
                     rs -> {
-                        names.put(rs.getLong("id"), "№ позиции " + rs.getLong("number")
-                                + ", код " + rs.getString("public_code"));
+                        names.put(rs.getLong("id"), "номер товара "
+                                + ru.partsflow.shared.PartNumberQuery.format(rs.getLong("number")));
                     },
                     (Object) chunk.toArray(Long[]::new));
         }

@@ -1,3 +1,4 @@
+import { partNumber } from '../inventory/partNumber';
 import { useCallback, useEffect, useState } from 'react';
 import { loadFitList, setEngineMatters, type FitListPage } from '../inventory/catalog';
 import { useLockedScroll } from '../ui/useLockedScroll';
@@ -53,7 +54,7 @@ export function ApplicabilityList({ canEdit, onClose }: { canEdit: boolean; onCl
           <table className="table">
             <thead>
               <tr>
-                <th>№ позиции</th><th>Запчасть</th><th>Марка</th><th>Модель</th>
+                <th>Номер товара</th><th>Запчасть</th><th>Марка</th><th>Модель</th>
                 <th>Поколение</th><th>Годы</th><th>Кто установил</th><th>Установлена</th>
                 <th>Двигатель важен</th>
               </tr>
@@ -61,7 +62,7 @@ export function ApplicabilityList({ canEdit, onClose }: { canEdit: boolean; onCl
             <tbody>
               {data.rows.map((r, i) => (
                 <tr key={`${r.partId}-${i}`}>
-                  <td>{r.number}</td>
+                  <td>{partNumber(r.number)}</td>
                   <td>{r.title}</td>
                   <td>{r.brand ?? '—'}</td>
                   <td>{r.model ?? '—'}</td>

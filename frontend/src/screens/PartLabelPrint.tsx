@@ -8,18 +8,16 @@ import { LABEL_SIZE_NOTE, partLabel } from '../labels/labels';
  * <p>Этикетку перепечатывают поштучно и постоянно: отклеилась, порвалась,
  * залили маслом, деталь переупаковали. Пачкой их печатают один раз — при
  * приёмке партии. А поштучно было нельзя вовсе: экран «Этикетки» отправляет
- * в печать всю выдачу поиска, выбрать из неё одну нечем, и точный код
- * в запросе не помогает — он неугадываемый, и на руках его нет как раз
- * потому, что этикетка отклеилась.
+ * в печать всю выдачу поиска, выбрать из неё одну нечем.
  *
  * <p>Этикетка рисуется тем же {@link LabelSheet} и тем же {@link partLabel},
  * что и на экране «Этикетки»: второй способ рисовать её разошёлся бы
  * с первым на первой же правке ширины модуля штрихкода — и разошёлся бы
  * незаметно, потому что сравнивать наклейки из двух мест никто не станет.
  */
-export function PartLabelPrint({ code, title, price, condition }: {
-  /** Публичный код позиции: он и кодируется штрихкодом. */
-  code: string | null;
+export function PartLabelPrint({ number, title, price, condition }: {
+  /** Номер товара: он и кодируется штрихкодом (задача 0366). */
+  number: number | null;
   title: string;
   price: number | null;
   /** Код состояния: печатается словом рядом с ценой (задача 0314). */
@@ -36,7 +34,7 @@ export function PartLabelPrint({ code, title, price, condition }: {
     }
   }, [sheet]);
 
-  if (code === null || code === '') {
+  if (number === null) {
     return (
       <>
         <button type="button" className="button--ghost" disabled>
@@ -63,7 +61,7 @@ export function PartLabelPrint({ code, title, price, condition }: {
       {/* Предпросмотр он же то, что уйдёт в печать, — как и на экране
           «Этикетки»: отдельная вёрстка для принтера разошлась бы
           с увиденным незаметно. */}
-      <LabelSheet labels={[partLabel(code, title, price, condition)]} />
+      <LabelSheet labels={[partLabel(number, title, price, condition)]} />
       <p className="note no-print">{LABEL_SIZE_NOTE}</p>
       <div className="filter-row no-print">
         {/* Диалог печати закрывают и по ошибке, и чтобы поправить размер:

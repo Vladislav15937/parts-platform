@@ -1,5 +1,6 @@
 package ru.partsflow.inventory;
 
+import ru.partsflow.shared.PartNumberQuery;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,10 +33,11 @@ public class StockNaming {
     }
 
     /**
-     * «Фара Toyota Camry 2007 лев. · б/у (55747F0F91CD)».
+     * «Фара Toyota Camry 2007 лев. · б/у (номер товара 300 001)».
      *
-     * <p>Заголовок и код товара вместе: по заголовку деталь узнают на экране,
-     * по коду — на этикетке, наклеенной на неё же.
+     * <p>Заголовок и Номер товара вместе: по заголовку деталь узнают на экране,
+     * по номеру — на этикетке, наклеенной на неё же (задача 0366: этикетка
+     * кодирует Номер товара, а не публичный код).
      *
      * <p>Слово состояния — сразу за наименованием, тем же разделителем
      * и тем же словарём, что у остальных отказов ({@link PartNaming#format},
@@ -51,12 +53,12 @@ public class StockNaming {
         if (partId == null) {
             return "деталь не указана";
         }
-        return jdbc.query("SELECT title, condition, public_code FROM part WHERE id = ?",
+        return jdbc.query("SELECT title, condition, number FROM part WHERE id = ?",
                 rs -> rs.next()
-                        ? "%s (%s)".formatted(
+                        ? "%s (номер товара %s)".formatted(
                                 PartNaming.format(rs.getString("title"),
                                         conditionOf(rs.getString("condition")), null),
-                                rs.getString("public_code"))
+                                PartNumberQuery.format(rs.getLong("number")))
                         // Позиции нет — значит её удалили между проверкой
                         // и отказом. Номер строки человеку не говорит ничего,
                         // а искать по нему нечего: карточки больше нет.

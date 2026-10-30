@@ -128,8 +128,8 @@ class PartUpdateTest extends PostgresTestBase {
     @DisplayName("Занятый штрихкод называет позицию, а не отвечает про целостность")
     void takenBarcodeIsExplained() throws Exception {
         MockHttpSession session = login("vladelec");
-        String code = inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+        // Позиция-владелец названа номером товара, а не публичным кодом (задача 0366).
+        String code = shownNumberOf(partId);
         Long other = inTenant(() -> jdbc.queryForObject("""
                 INSERT INTO part (category_id, title, price) VALUES (1, 'Бампер', 1000)
                 RETURNING id""", Long.class));
@@ -813,8 +813,8 @@ class PartUpdateTest extends PostgresTestBase {
                 .andExpect(jsonPath("$.changed").value(1))
                 .andExpect(jsonPath("$.rejected").value(1))
                 // Числа мало: «одна не прошла» из тридцати тысяч — это
-                // «пойди найди её». Публичный код виден на витрине.
-                .andExpect(jsonPath("$.rejectedCodes[0]").value(codeOf(cheap)))
+                // «пойди найди её». Номер товара виден на витрине (задача 0366).
+                .andExpect(jsonPath("$.rejectedCodes[0]").value(shownNumberOf(cheap)))
                 .andExpect(jsonPath("$.rejectedReason").value(
                         org.hamcrest.Matchers.containsString("Отрицательной цены не бывает")));
 
@@ -1057,9 +1057,9 @@ class PartUpdateTest extends PostgresTestBase {
         assertThat(moneyOf(zeroed, "cost_price")).isEqualByComparingTo("500");
     }
 
-    private String codeOf(Long part) {
-        return inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, part));
+    private String shownNumberOf(Long part) {
+        return ru.partsflow.shared.PartNumberQuery.format(inTenant(() -> jdbc.queryForObject(
+                "SELECT number FROM part WHERE id = ?", Long.class, part)));
     }
 
     private BigDecimal moneyOf(Long part, String column) {

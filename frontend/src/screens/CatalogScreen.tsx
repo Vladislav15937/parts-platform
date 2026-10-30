@@ -26,6 +26,7 @@ import {
   NO_VEHICLE,
   type CatalogPage,
   type CatalogQuery,
+  type CatalogView,
   type CatalogRow,
   type PartPhoto,
 } from '../inventory/catalog';
@@ -77,7 +78,15 @@ function columnTitle(key: string): string {
   return COLUMNS.find((c) => c.key === key)?.title ?? key;
 }
 
-export function CatalogScreen({ rights }: { rights: Rights }) {
+export function CatalogScreen({ rights, donorFilter = null, onDonorFilterUsed }: {
+  rights: Rights;
+  /**
+   * Открыт с карточки машины («N запчастей — Посмотреть», задача 0364):
+   * склад с отбором по её номеру поверх запомненной настройки.
+   */
+  donorFilter?: string | null;
+  onDonorFilterUsed?: () => void;
+}) {
   const [page, setPage] = useState<CatalogPage | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -210,9 +219,17 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
     void loadView(SIZE)
       .then((view) => {
         if (mounted.current) {
-          setQuery(view.query);
-          setVisible(view.visible);
+          const shown = donorFilter === null ? view : donorView(view, donorFilter);
+          setQuery(shown.query);
+          setVisible(shown.visible);
           saved.current = viewKey(view);
+          if (shown !== view) {
+            // Запоминается, как и тот же отбор, поставленный с карточки
+            // позиции: настройка — то, что сейчас на экране.
+            saved.current = viewKey(shown);
+            void saveView(shown);
+            onDonorFilterUsed?.();
+          }
           setRestored(true);
         }
       });
@@ -341,7 +358,7 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
           Поиск
           <input
             value={search}
-            placeholder="№ позиции, номер товара, наименование или номер детали"
+            placeholder="Номер товара, наименование или номер детали"
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && change({ q: search })}
           />
@@ -950,4 +967,20 @@ export function CatalogScreen({ rights }: { rights: Rights }) {
 
 function describe(cause: unknown, fallback: string): string {
   return cause instanceof ApiError && cause.message ? cause.message : fallback;
+}
+
+/**
+ * Склад, открытый с карточки машины: всё, что с неё снято (задача 0364).
+ *
+ * <p>Прочие отборы сняты, а отсутствующие показаны: плитка считает каждую
+ * позицию, снятую с машины, — и проданную тоже, — и число на ней обязано
+ * совпасть с числом строк, к которым она ведёт. Колонка «Номер донора»
+ * включается, иначе отбор невидим и снять его нечем (запись про
+ * `onDonorParts` у карточки позиции). Порядок остаётся запомненный.
+ */
+export function donorView(view: CatalogView, donorCode: string): CatalogView {
+  return {
+    query: { ...withoutFilters(view.query), missing: true, columns: { donor: donorCode } },
+    visible: view.visible.includes('donor') ? view.visible : [...view.visible, 'donor'],
+  };
 }

@@ -269,7 +269,6 @@ public class SoldItemsReportService {
                     day(rs.getTimestamp("closed_at")),
                     String.valueOf(rs.getLong("deal_number")),
                     String.valueOf(rs.getLong("part_number")),
-                    text(rs.getString("public_code")),
                     text(rs.getString("title")),
                     text(rs.getString("condition_word")),
                     text(rs.getString(PartNaming.OEM_COLUMN)),
@@ -295,7 +294,7 @@ public class SoldItemsReportService {
      * в PR.
      */
     public static List<String> exportHeader() {
-        return List.of("Дата выдачи", "Номер сделки", "№ позиции", "Номер товара",
+        return List.of("Дата выдачи", "Номер сделки", "Номер товара",
                 "Наименование",
                 "Состояние", "Номер производителя", "Цена продажи", "Прежняя цена", "Себестоимость", "Выгода",
                 "Количество", "Склад выдачи", "Ответственный", "Поставка", "Номер донора");

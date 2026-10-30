@@ -44,7 +44,7 @@ describe('состав перевозки называет позицию ном
     vi.unstubAllGlobals();
   });
 
-  it('колонка «№ позиции» стоит первой, и в ней номер этой позиции', async () => {
+  it('колонка «Номер товара» стоит первой, и в ней номер этой позиции', async () => {
     render(<StockMovesScreen rights={rightsAs('OWNER')} />);
     await waitFor(() => expect(screen.getByText('Ангар')).toBeTruthy());
 
@@ -58,28 +58,24 @@ describe('состав перевозки называет позицию ном
     const headers = [...table.querySelectorAll('thead th')]
       .map((cell) => (cell.textContent ?? '').trim());
 
-    const at = headers.indexOf('№ позиции');
+    const at = headers.indexOf('Номер товара');
     expect(
       at,
-      `колонки «№ позиции» в составе документа нет: ${headers.join(' · ')}`,
+      `колонки «Номер товара» в составе документа нет: ${headers.join(' · ')}`,
     ).toBeGreaterThanOrEqual(0);
-    expect(at, 'колонка «№ позиции» стоит не первой').toBe(0);
+    expect(at, 'колонка «Номер товара» стоит не первой').toBe(0);
 
     const cells = [...table.querySelectorAll('tbody tr td')]
       .map((cell) => (cell.textContent ?? '').trim());
     expect(
       cells[at],
-      'в колонке «№ позиции» стоит не номер позиции',
+      'в колонке «Номер товара» стоит не номер товара',
     ).toBe('347');
 
-    // Публичный код рядом остался — его читают с этикетки на самой детали, —
-    // и зовётся он тем же словом, что на витрине и в карточке: рядом
-    // с «№ позиции» прежнее «Публичный код» было третьим написанием одного.
-    expect(
-      headers,
-      `публичный код потерял своё название: ${headers.join(' · ')}`,
-    ).toContain('Номер товара');
-    expect(cells[1]).toBe('A1B2C3');
+    // Колонка одна (задача 0366): публичный код (случайные байты) человеку
+    // не показывается — ни колонкой, ни в клетке.
+    expect(headers.filter((h) => h === 'Номер товара').length, 'колонок номера две').toBe(1);
+    expect(cells, 'публичный код показан в таблице').not.toContain('A1B2C3');
   });
 });
 

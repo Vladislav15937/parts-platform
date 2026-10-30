@@ -7,6 +7,7 @@ import {
   type CatalogRow, type PartEdit, type PriceOperation,
 } from '../inventory/catalog';
 import { generationOf } from '../inventory/partCard';
+import { PART_NUMBER_TITLE, partNumber } from '../inventory/partNumber';
 import { LongNumberNote } from '../inventory/LongNumberNote';
 import { OEM_FIELD_NOTE, numberTooLong } from '../inventory/oemLength';
 import { notSavedNote, notSavedSummary, type NotSavedField } from '../inventory/notSaved';
@@ -162,8 +163,12 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
     setForm((f) => (f === null ? f : { ...f, [key]: value }));
   }
 
-  /** Строка машины под замком: у позиции есть донор либо это ещё не известно. */
+  /**
+   * Строка под замком: номер товара — всегда (задача 0366), строка машины —
+   * когда у позиции есть донор либо это ещё не известно.
+   */
   function locked(field: Field): boolean {
+    if (field.kind === 'fixed') return true;
     if (donor.kind === 'none' || !isDonorLocked(field)) return false;
     return !(field.key === 'donorCode' && donor.kind === 'donor');
   }
@@ -221,10 +226,6 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
   async function save(): Promise<void> {
     if (form === null || loaded === null || card === null || open.length === 0) return;
     if (tooLong !== null) return;
-    if (open.includes('number') && !/^\s*[1-9][0-9]*\s*$/.test(form.number)) {
-      setError('№ позиции — целое число больше нуля');
-      return;
-    }
     setError('');
     setSaving(true);
     try {
@@ -376,7 +377,8 @@ export function PartEditForm({ partId, row, onSaved, onCancel }: {
                     && <span className="card-edit__not-saved">{notSavedNote(lost)}</span>}
                 </span>
                 {closed
-                    ? <LockMark label={field.label} />
+                    ? <LockMark label={field.label}
+                                reason={field.kind === 'fixed' ? field.reason : DONOR_LOCK_REASON} />
                     : opened
                     ? (
                       <button type="button" className="button--ghost"
@@ -446,12 +448,21 @@ export const DONOR_LOCK_NOTE = 'Марка, модель и остальные �
 export const DONOR_UNKNOWN_NOTE = 'Не удалось узнать, с какой машины снята позиция, — поля машины'
   + ' пока не правятся. Обновите страницу.';
 
+/** Причина замка у строк машины — значок один на восемь строк. */
+const DONOR_LOCK_REASON = 'из машины-донора, не правится';
+
+/**
+ * Причина замка у номера товара (задача 0366): его присваивает система,
+ * и правки у него нет вовсе — как у ориентира, где номер серый с замком.
+ */
+export const PART_NUMBER_LOCK_REASON = 'присваивает система, не правится';
+
 /**
  * Замок у строки вместо «Изменить», как у ориентира: значение видно, править
- * нечем. Подпись — для чтения с экрана и по наведению: значок один на восемь строк.
+ * нечем. Подпись — для чтения с экрана и по наведению.
  */
-function LockMark({ label }: { label: string }) {
-  const text = `${label}: из машины-донора, не правится`;
+function LockMark({ label, reason }: { label: string; reason: string }) {
+  const text = `${label}: ${reason}`;
   return (
     <span className="card-edit__lock" role="img" aria-label={text} title={text}>
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -540,6 +551,8 @@ function draftText(field: Field, form: Draft, row: CatalogRow): string {
     }
     case 'date':
       return dromDateShown(form.adDate);
+    case 'fixed':
+      return partNumber(form.number);
     case 'bazon':
       // Слова на витрине уже из справочника (PartVehicle) — они и показываются.
       return isBazonEmpty(form.bazonVehicle) ? ''
@@ -658,6 +671,8 @@ type Field =
   | { kind: 'side'; key: 'sideLr' | 'sideFr'; label: string; options: Record<string, string> }
   | { kind: 'price'; key: 'price'; label: string; unit?: string }
   | { kind: 'condition'; key: 'condition'; label: string }
+  /** Под замком всегда (задача 0366): значение видно, правки нет. */
+  | { kind: 'fixed'; key: 'number'; label: string; reason: string }
   | { kind: 'grade'; key: 'qualityGrade'; label: string }
   | { kind: 'check'; key: 'published'; label: string }
   | { kind: 'block'; key: 'textBlockId'; label: string }
@@ -677,13 +692,11 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
   {
     title: 'Общая информация',
     fields: [
-      // Номер, которым деталь называют в разговоре. Правится (задача 0302);
-      // новые позиции система нумерует дальше вписанного.
-      { kind: 'text', key: 'number', label: '№ позиции',
-        note: 'Номер называют вслух — поменяв его, скажите об этом тем, кто знал прежний' },
-      { kind: 'text', key: 'code', label: 'Номер товара',
-        note: 'Он напечатан на этикетке и уходит в прайс Дрома: после смены перепечатайте'
-          + ' этикетку, а объявление на площадке может завестись заново' },
+      // Номер товара — порядковый номер, которым деталь называют вслух; он
+      // же на этикетке и номер объявления Дрома. Присваивает система, правки
+      // нет (задача 0366, «Всё как у bazon»: серая строка с замком). Правка
+      // задач 0302/0303 отменена. Публичный код (hex) в форме не показан вовсе.
+      { kind: 'fixed', key: 'number', label: PART_NUMBER_TITLE, reason: PART_NUMBER_LOCK_REASON },
       // Состояние стоит второй строкой, как у ориентира: сразу под номером товара.
       { kind: 'condition', key: 'condition', label: 'Состояние' },
       { kind: 'grade', key: 'qualityGrade', label: 'Оценка состояния' },
@@ -795,7 +808,7 @@ const SECTIONS: Array<{ title: string; fields: Field[] }> = [
  * формы). Нераскрытое — `undefined`, то есть ключа в запросе нет, и сервер
  * поле не трогает.
  */
-const SENT_WHEN_OPEN = ['code', 'sideLr', 'sideFr', 'authenticity', 'oem',
+const SENT_WHEN_OPEN = ['sideLr', 'sideFr', 'authenticity', 'oem',
   'crosses', 'legacyCode', 'dromAdNumber', 'donorCode', 'brand', 'model', 'generation',
   'body', 'engine', 'year', 'equipment', 'bazonVehicle'] as const;
 
@@ -984,10 +997,8 @@ export function toEdit(form: Draft, open: readonly string[] = []): PartEdit {
     (open.includes(key) ? form[key] : undefined);
   return {
     // Поля задачи 0302 — только раскрытые; очистка — пустая строка.
-    // Строкой цифр: Number() округлил бы номер больше 2^53 − 1, и сервер
-    // принял бы не тот (задача 0303). Границу называет сервер словами.
-    number: open.includes('number') ? form.number.trim() : undefined,
-    code: sent('code'),
+    // Номера товара и публичного кода здесь нет: их не правит никто
+    // (задача 0366), и сервер отказывает словами, если их всё же прислали.
     sideLr: sent('sideLr'),
     sideFr: sent('sideFr'),
     authenticity: sent('authenticity'),

@@ -96,11 +96,12 @@ public class StockMoveController {
                     document.getStatus().name(), document.getCompletedAt(),
                     document.getLines().size(),
                     outcome.skipped().stream()
-                            .map(item -> new SkippedItemView(item.partId(), item.publicCode()))
+                            .map(item -> new SkippedItemView(item.partId(), item.publicCode(), item.number()))
                             .toList());
         }
     }
 
-    public record SkippedItemView(Long partId, String publicCode) {
+    /** @param number номер товара: его называют кладовщику вслух (задача 0366). */
+    public record SkippedItemView(Long partId, String publicCode, Long number) {
     }
 }

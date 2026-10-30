@@ -93,8 +93,10 @@ public final class AuditedColumns {
         // inventory.PartIdentity через AuditJournal, мимо сущности: oem и crosses
         // не колонки part, а номера производителя из part_oem, названные так
         // в снимке правки.
-        PART.put("number", "№ позиции");
-        PART.put("public_code", "Номер товара");
+        // Задача 0366: «Номер товара» — порядковый номер, как у ориентира; шестнадцатеричный
+        // код в прежних записях истории назван своим именем (правки 0302–0366).
+        PART.put("number", "Номер товара");
+        PART.put("public_code", "Публичный код");
         PART.put("oem", "Номер производителя");
         PART.put("crosses", "Кросс-номера");
         PART.put("authenticity", "Оригинальность");
@@ -278,6 +280,18 @@ public final class AuditedColumns {
         DONOR.put("purchase_date", "Дата покупки");
         DONOR.put("supplier_name", "Продавец машины");
         DONOR.put("note", "Примечание");
+        // Задача 0364: машину правят формой после заведения, и правка марки,
+        // руля или коробки без этих строк в журнал не попала бы вовсе —
+        // слушатель сравнивает только названные здесь колонки. Подписи — те,
+        // что на форме машины.
+        DONOR.put("brand_id", "Марка");
+        DONOR.put("model_id", "Модель");
+        DONOR.put("generation_id", "Поколение");
+        DONOR.put("steering", "Расположение руля");
+        DONOR.put("transmission_type", "Тип КПП");
+        DONOR.put("transmission_model", "Модель КПП");
+        DONOR.put("drive_type", "Привод");
+        DONOR.put("equipment_code", "Комплектация");
     }
 
     public static final Map<String, String> SUPPLY = new LinkedHashMap<>();
@@ -476,7 +490,9 @@ public final class AuditedColumns {
     /** В снимке лежит идентификатор, человеку нужно имя. */
     public static final Set<String> REFERENCES = Set.of(
             "storage_cell_id", "donor_id", "part_kind_id", "supply_id",
-            "customer_id", "manager_id", "payment_source_id");
+            "customer_id", "manager_id", "payment_source_id",
+            // Машина донора: справочник машин общий, имя берётся оттуда (0364).
+            "brand_id", "model_id", "generation_id");
 
     /**
      * Состояние — словарём самого перечисления, а не копией здесь
@@ -566,6 +582,12 @@ public final class AuditedColumns {
             case "cost_type" -> COST_TYPES.getOrDefault(raw, raw);
             case "feed_status" -> FEED_STATUSES.getOrDefault(raw, raw);
             case "kind" -> SupplyKinds.title(raw);
+            // Руль, коробка и привод машины — общим словарём, тем же, что
+            // у карточки машины и «Комплектации» (0364): «RIGHT» в журнале —
+            // внутреннее представление.
+            case "steering" -> ValueWords.steering(raw);
+            case "transmission_type" -> ValueWords.transmission(raw);
+            case "drive_type" -> ValueWords.drive(raw);
             case "match_status" -> MATCH_STATUSES.getOrDefault(raw, raw);
             case "customer_type" -> "COMPANY".equals(raw) ? "да" : "PERSON".equals(raw) ? "нет" : raw;
             case String flag when FLAGS.contains(flag) -> "true".equals(raw) ? "да" : "нет";
@@ -622,6 +644,10 @@ public final class AuditedColumns {
                     + " AS title FROM tenant_member m WHERE m.id IN (%s)";
             case "payment_source_id" ->
                     "SELECT id, name AS title FROM payment_source WHERE id IN (%s)";
+            case "brand_id" -> "SELECT id, name AS title FROM catalog.brand WHERE id IN (%s)";
+            case "model_id" -> "SELECT id, name AS title FROM catalog.model WHERE id IN (%s)";
+            case "generation_id" ->
+                    "SELECT id, name AS title FROM catalog.generation WHERE id IN (%s)";
             default -> null;
         };
         if (sql == null) {

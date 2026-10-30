@@ -131,7 +131,7 @@ describe('разрез по машине на экране отчётов', () =
 
     // Строка позиции: номер с витрины, вид детали, дата днём, а не в ISO.
     expect(screen.getByText('Фара передняя левая')).toBeTruthy();
-    expect(screen.getByText('A1B2C3')).toBeTruthy();
+    expect(screen.queryByText('A1B2C3'), 'публичный код показан (задача 0366)').toBeNull();
     expect(screen.getByText('30.08.2026')).toBeTruthy();
   });
 
@@ -148,7 +148,7 @@ describe('разрез по машине на экране отчётов', () =
    * убранная колонка обязана валить тест словами про её отсутствие,
    * а не пустым экраном. Тот же приём, что в `wheelNumberColumn.test.tsx`.
    */
-  it('колонка «№ позиции» стоит первой, и в ней номер этой позиции', async () => {
+  it('колонка «Номер товара» стоит первой, и в ней номер этой позиции', async () => {
     render(<ReportsScreen canRead />);
     await pickMachine();
     await waitFor(() => expect(screen.getByText('Фара передняя левая')).toBeTruthy());
@@ -159,31 +159,28 @@ describe('разрез по машине на экране отчётов', () =
     const table = screen.getByText('Фара передняя левая').closest('table')!;
     const headers = Array.from(table.querySelectorAll('thead th'))
       .map((cell) => (cell.textContent ?? '').trim());
-    const at = headers.findIndex((title) => title === '№ позиции');
+    const at = headers.findIndex((title) => title === 'Номер товара');
     expect(
       at,
-      `колонки «№ позиции» на вкладке разреза нет: ${headers.join(' · ')}`,
+      `колонки «Номер товара» на вкладке разреза нет: ${headers.join(' · ')}`,
     ).toBeGreaterThanOrEqual(0);
 
     // Первой, как на витрине склада и на вкладке колёс: один и тот же
     // номер, показанный на соседних экранах в разных местах, читается
     // как разные числа.
-    expect(at, 'колонка «№ позиции» стоит не первой').toBe(0);
+    expect(at, 'колонка «Номер товара» стоит не первой').toBe(0);
 
     const cells = Array.from(table.querySelectorAll('tbody tr td'))
       .map((cell) => (cell.textContent ?? '').trim());
     expect(
       cells[at],
-      'в колонке «№ позиции» стоит не номер позиции',
+      'в колонке «Номер товара» стоит не номер товара',
     ).toBe('347');
 
-    // Публичный код рядом остался и называется тем же словом, что везде:
-    // рядом с «№ позиции» прежнее «Номер» не говорит, какой из двух.
-    expect(
-      headers,
-      `публичный код потерял своё название: ${headers.join(' · ')}`,
-    ).toContain('Номер товара');
-    expect(cells[1]).toBe('A1B2C3');
+    // Колонка одна (задача 0366): публичный код (случайные байты) человеку
+    // не показывается — ни колонкой, ни в клетке.
+    expect(headers.filter((h) => h === 'Номер товара').length, 'колонок номера две').toBe(1);
+    expect(cells, 'публичный код показан в таблице').not.toContain('A1B2C3');
   });
 
   it('на вкладке «Продано» сумма названа продажей, а не розничной стоимостью',

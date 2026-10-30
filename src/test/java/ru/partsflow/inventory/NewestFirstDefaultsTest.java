@@ -266,15 +266,15 @@ class NewestFirstDefaultsTest extends PostgresTestBase {
         return numbers;
     }
 
-    /** Первая колонка файла — «№ позиции»; разбор по заголовку, а не по месту. */
+    /** Первая колонка файла — «Номер товара» (порядковый номер, задача 0366); разбор по заголовку, а не по месту. */
     private List<Long> exportNumbers(
             org.springframework.test.web.servlet.RequestBuilder request) throws Exception {
         String file = new String(mvc.perform(request).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsByteArray(), StandardCharsets.UTF_8);
         String[] lines = file.replace("﻿", "").split("\r?\n");
         List<String> header = cells(lines[0]);
-        int at = header.indexOf("№ позиции");
-        assertThat(at).as("в выгрузке нет колонки «№ позиции»: %s", header).isNotNegative();
+        int at = header.indexOf("Номер товара");
+        assertThat(at).as("в выгрузке нет колонки «Номер товара»: %s", header).isNotNegative();
         List<Long> numbers = new ArrayList<>();
         for (int line = 1; line < lines.length; line++) {
             if (!lines[line].isBlank()) {

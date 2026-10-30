@@ -97,55 +97,73 @@ public class DonorDirectory {
      */
     @Transactional(readOnly = true)
     public Optional<Card> cardByPart(long partId) {
-        List<Card> found = jdbc.query("""
-                SELECT d.id, d.public_code, d.legacy_code, d.status, d.location, d.vin,
-                       d.year, d.body_code, d.engine_code, d.steering, d.drive_type,
-                       d.transmission_type, d.transmission_model, d.color, d.color_code,
-                       d.equipment_code, d.mileage_km, d.note,
-                       b.name AS brand, m.name AS model, g.name AS generation,
-                       s.kind AS supply_kind, s.number AS supply_number,
-                       (SELECT count(*) FROM part sibling WHERE sibling.donor_id = d.id)
-                           AS parts_count
-                  FROM part p
-                  JOIN donor d ON d.id = p.donor_id
-                  LEFT JOIN catalog.brand b      ON b.id = d.brand_id
-                  LEFT JOIN catalog.model m      ON m.id = d.model_id
-                  LEFT JOIN catalog.generation g ON g.id = d.generation_id
-                  LEFT JOIN supply s             ON s.id = d.supply_id
-                 WHERE p.id = ?""",
-                (rs, i) -> new Card(
-                        rs.getLong("id"),
-                        // Клиент помнит машину по своему номеру, а не по нашему:
-                        // в отчёте окупаемости это уже учтено, тут то же самое.
-                        rs.getString("legacy_code") == null
-                                ? rs.getString("public_code") : rs.getString("legacy_code"),
-                        label(STATUSES, rs.getString("status")),
-                        supply(rs.getString("supply_kind"), rs.getString("supply_number")),
-                        rs.getString("brand"),
-                        rs.getString("model"),
-                        rs.getString("generation"),
-                        rs.getString("body_code"),
-                        rs.getString("engine_code"),
-                        rs.getObject("year") == null ? null : rs.getInt("year"),
-                        ValueWords.steering(rs.getString("steering")),
-                        transmission(rs.getString("transmission_type"),
-                                rs.getString("transmission_model")),
-                        ValueWords.drive(rs.getString("drive_type")),
-                        color(rs.getString("color"), rs.getString("color_code")),
-                        rs.getString("equipment_code"),
-                        rs.getObject("mileage_km") == null ? null : rs.getInt("mileage_km"),
-                        rs.getString("vin"),
-                        rs.getString("location"),
-                        rs.getString("note"),
-                        rs.getInt("parts_count")),
-                partId);
-        return found.stream().findFirst();
+        return jdbc.query(CARD + " WHERE d.id = (SELECT donor_id FROM part WHERE id = ?)",
+                CARD_ROW, partId).stream().findFirst();
     }
+
+    /**
+     * Та же карточка по самой машине — для экрана «Машина» (задача 0364):
+     * плитка «N запчастей — Посмотреть» и строки машины, как у Bazon.
+     *
+     * <p><b>Один запрос на обе поверхности, а не свой.</b> Карточка позиции
+     * и карточка машины показывают одну машину одними словами; свой запрос
+     * назвал бы её иначе на первой же правке словаря.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Card> cardOf(long donorId) {
+        return jdbc.query(CARD + " WHERE d.id = ?", CARD_ROW, donorId).stream().findFirst();
+    }
+
+    /*
+     * Число запчастей считается по линии товара PART: «Посмотреть» ведёт
+     * в список склада, а колёса в него не попадают вовсе (у них своя вкладка),
+     * и число на плитке разошлось бы с числом строк, к которым оно ведёт.
+     */
+    private static final String CARD = """
+            SELECT d.id, d.public_code, d.legacy_code, d.status, d.location, d.vin,
+                   d.year, d.body_code, d.engine_code, d.steering, d.drive_type,
+                   d.transmission_type, d.transmission_model, d.color, d.color_code,
+                   d.equipment_code, d.mileage_km, d.note,
+                   b.name AS brand, m.name AS model, g.name AS generation,
+                   s.kind AS supply_kind, s.number AS supply_number,
+                   (SELECT count(*) FROM part sibling
+                     WHERE sibling.donor_id = d.id AND sibling.product_line = 'PART')
+                       AS parts_count
+              FROM donor d
+              LEFT JOIN catalog.brand b      ON b.id = d.brand_id
+              LEFT JOIN catalog.model m      ON m.id = d.model_id
+              LEFT JOIN catalog.generation g ON g.id = d.generation_id
+              LEFT JOIN supply s             ON s.id = d.supply_id""";
 
     private static final Map<String, String> STATUSES = Map.of(
             "PURCHASED", "Куплена", "DISMANTLING", "В разборе",
             "DISMANTLED", "Разобрана", "WRITTEN_OFF", "Списана");
 
+    private static final RowMapper<Card> CARD_ROW = (rs, i) -> new Card(
+                rs.getLong("id"),
+                // Клиент помнит машину по своему номеру, а не по нашему:
+                // в отчёте окупаемости это уже учтено, тут то же самое.
+                rs.getString("legacy_code") == null
+                        ? rs.getString("public_code") : rs.getString("legacy_code"),
+                label(STATUSES, rs.getString("status")),
+                supply(rs.getString("supply_kind"), rs.getString("supply_number")),
+                rs.getString("brand"),
+                rs.getString("model"),
+                rs.getString("generation"),
+                rs.getString("body_code"),
+                rs.getString("engine_code"),
+                rs.getObject("year") == null ? null : rs.getInt("year"),
+                ValueWords.steering(rs.getString("steering")),
+                transmission(rs.getString("transmission_type"),
+                        rs.getString("transmission_model")),
+                ValueWords.drive(rs.getString("drive_type")),
+                color(rs.getString("color"), rs.getString("color_code")),
+                rs.getString("equipment_code"),
+                rs.getObject("mileage_km") == null ? null : rs.getInt("mileage_km"),
+                rs.getString("vin"),
+                rs.getString("location"),
+                rs.getString("note"),
+                rs.getInt("parts_count"));
 
     /**
      * Поставка словами, а не кодом.

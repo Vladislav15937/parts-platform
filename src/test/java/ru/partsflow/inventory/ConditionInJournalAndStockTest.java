@@ -115,12 +115,13 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
     // ---------- отказы склада ----------
 
     @Test
-    @DisplayName("Отказ склада называет состояние словом между наименованием и кодом")
+    @DisplayName("Отказ склада называет состояние словом между наименованием и номером товара")
     void stockRefusalNamesTheCondition() throws Exception {
         Long warehouse = warehouse("Склад списания");
         Long partId = stockPart("Фара склада", PartCondition.CONTRACT, warehouse);
-        String code = inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+        // Позиция названа номером товара, а не публичным кодом (задача 0366).
+        String code = "номер товара " + ru.partsflow.shared.PartNumberQuery.format(inTenant(
+                () -> jdbc.queryForObject("SELECT number FROM part WHERE id = ?", Long.class, partId)));
 
         mvc.perform(post("/api/stock/write-offs").with(csrf()).session(login("vladelec"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -143,8 +144,9 @@ class ConditionInJournalAndStockTest extends PostgresTestBase {
     void stockRefusalWithoutConditionPrintsNoWord() throws Exception {
         Long warehouse = warehouse("Склад без состояния");
         Long partId = stockPart("Фара без состояния", null, warehouse);
-        String code = inTenant(() -> jdbc.queryForObject(
-                "SELECT public_code FROM part WHERE id = ?", String.class, partId));
+        // Позиция названа номером товара, а не публичным кодом (задача 0366).
+        String code = "номер товара " + ru.partsflow.shared.PartNumberQuery.format(inTenant(
+                () -> jdbc.queryForObject("SELECT number FROM part WHERE id = ?", Long.class, partId)));
 
         assertThat(inTenant(() -> naming.part(partId)))
                 .isEqualTo("Фара без состояния (" + code + ")");

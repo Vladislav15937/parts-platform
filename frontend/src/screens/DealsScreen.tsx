@@ -333,7 +333,7 @@ function DealsList({ onOpenDeal }: { onOpenDeal: (dealId: number) => void }) {
           Поиск
           <input
             value={draft}
-            placeholder="Номер сделки, клиент, № позиции или код детали"
+            placeholder="Номер сделки, клиент, номер товара или код детали"
             onChange={(e) => setDraft(e.target.value)}
           />
         </label>

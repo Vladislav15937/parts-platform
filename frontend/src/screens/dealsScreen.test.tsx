@@ -118,7 +118,7 @@ describe('список сделок продавца', () => {
     // Пусто вообще и пусто по отбору — разные утверждения.
     await waitFor(() => expect(screen.getByText('Сделок в этом состоянии нет')).toBeTruthy());
 
-    fireEvent.change(screen.getByPlaceholderText('Номер сделки, клиент, № позиции или код детали'), {
+    fireEvent.change(screen.getByPlaceholderText('Номер сделки, клиент, номер товара или код детали'), {
       target: { value: '55747F0F91CD' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
@@ -146,7 +146,7 @@ describe('список сделок продавца', () => {
     render(<DealsScreen onOpenDeal={() => {}} />);
     await waitFor(() => expect(screen.getByText('Сделок в этом состоянии нет')).toBeTruthy());
 
-    const field = screen.getByPlaceholderText(/№ позиции/);
+    const field = screen.getByPlaceholderText(/номер товара/);
     fireEvent.change(field, { target: { value: '№ 347' } });
     fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
 

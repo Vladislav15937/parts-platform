@@ -478,11 +478,17 @@ export function resolvePartScan(
   if (scanned === '') {
     return { kind: 'not-found' };
   }
-  const found = codes.find(
-    (c) =>
-      (c.publicCode !== null && normalizeCode(c.publicCode) === scanned) ||
-      (c.barcode !== null && normalizeCode(c.barcode) === scanned),
-  );
+  // Этикетка с задачи 0366 кодирует номер товара, а прежние этикетки —
+  // публичный код; на складе висят обе, и сканер находит по любой.
+  // Номер спрашивается первым: его печатаем теперь мы, а штрихкод владельца
+  // из цифр, совпавший с чужим номером, — случай его ввода, а не этикетки.
+  const found =
+    codes.find((c) => String(c.number) === scanned)
+    ?? codes.find(
+      (c) =>
+        (c.publicCode !== null && normalizeCode(c.publicCode) === scanned) ||
+        (c.barcode !== null && normalizeCode(c.barcode) === scanned),
+    );
   if (found === undefined) {
     return { kind: 'not-found' };
   }

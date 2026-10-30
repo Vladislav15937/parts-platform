@@ -103,7 +103,7 @@ describe('износ шины в процентах', () => {
 
   it('в таблице и в карточке износ — «30%», а не миллиметры', async () => {
     render(<WheelsScreen canIntake={false} rights={rightsAs('OWNER')} />);
-    await waitFor(() => expect(screen.getByText('W1A2B3C4D5E6')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('347')).toBeTruthy());
 
     const headers = Array.from(document.querySelectorAll('thead th'))
       .map((cell) => (cell.textContent ?? '').trim());
@@ -113,7 +113,7 @@ describe('износ шины в процентах', () => {
       .map((cell) => (cell.textContent ?? '').trim());
     expect(cells[at]).toBe('30%');
 
-    fireEvent.click(screen.getByText('W1A2B3C4D5E6').closest('tr') as HTMLElement);
+    fireEvent.click(screen.getByText('347').closest('tr') as HTMLElement);
     await waitFor(() => expect(document.querySelector('dl')).not.toBeNull());
     const terms = Array.from(document.querySelectorAll('dl dt'));
     const wear = terms.find((term) => term.textContent === 'Износ');
