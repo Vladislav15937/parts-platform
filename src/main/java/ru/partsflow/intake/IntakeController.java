@@ -167,6 +167,7 @@ public class IntakeController {
         donor.setDriveType(request.driveType());
         donor.setTransmissionType(request.transmissionType());
         donor.setTransmissionModel(request.transmissionModel());
+        donor.setEquipmentCode(request.equipmentCode());
         donor.setNote(request.note());
 
         Donor saved = intake.registerDonor(donor, request.supplyId(), CurrentUser.memberId());
@@ -333,6 +334,10 @@ public class IntakeController {
                                Donor.DriveType driveType,
                                Donor.TransmissionType transmissionType,
                                String transmissionModel,
+                               /* Комплектация машины: «500000», «G». Колонка была,
+                                  а заполнить её заводя машину было нечем (задача 0364):
+                                  поле молча отбрасывалось, и позиции наследовали пустоту. */
+                               String equipmentCode,
                                String note,
                                Long supplyId) {
     }
