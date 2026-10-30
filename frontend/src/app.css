@@ -944,6 +944,23 @@ details > .muted {
   overflow-wrap: anywhere;
 }
 
+/* На телефоне подпись над значением: рядом длинная подпись «Комментарий
+   к поступлению» оставляла значению полслова в строку — замерено при 390. */
+@media (max-width: 899px) {
+  .income-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .income-fields dt {
+    color: var(--muted);
+    font-size: 0.85em;
+  }
+
+  .income-fields dd {
+    margin-bottom: 0.5rem;
+  }
+}
+
 .income-history {
   list-style: none;
   padding: 0;

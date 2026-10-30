@@ -7,7 +7,6 @@ import {
   loadIncome, loadIncomes, newRequestId, postIncome, unpostIncome,
   type Income, type IncomeHistoryEntry, type IncomePage, type IncomeTab,
 } from '../intake/incomes';
-import { conditionTitle } from '../inventory/catalog';
 import { count, plural } from '../ui/plural';
 import { MONTHS } from '../ui/shortDate';
 import { useMounted } from '../ui/useMounted';
@@ -363,7 +362,9 @@ function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
   if (doc === null) {
     return (
       <section className="screen screen--wide">
-        <button type="button" className="button--ghost" onClick={onBack}>К списку</button>
+        <div className="row">
+          <button type="button" className="button--ghost" onClick={onBack}>К списку</button>
+        </div>
         {error !== '' ? <p className="note note--error">{error}</p> : <p className="note">Загружаем…</p>}
       </section>
     );
@@ -374,7 +375,9 @@ function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
 
   return (
     <section className="screen screen--wide">
-      <button type="button" className="button--ghost" onClick={onBack}>К списку</button>
+      <div className="row">
+        <button type="button" className="button--ghost" onClick={onBack}>К списку</button>
+      </div>
       <div className="screen-head">
         <div>
           <h2>Поступление № {doc.number}</h2>
@@ -461,12 +464,9 @@ function IncomeDocument({ id, onBack }: { id: number; onBack: () => void }) {
                   {doc.lines.map((line) => (
                     <tr key={line.partId}>
                       <td className="num">{line.number}</td>
-                      <td>
-                        {line.title}
-                        {line.condition !== null && (
-                          <span className="muted"> · {conditionTitle(line.condition) ?? ''}</span>
-                        )}
-                      </td>
+                      {/* Состояние в наименовании уже стоит пометкой («(б/у)»,
+                          задача 0336) — второе слово рядом было бы повтором. */}
+                      <td>{line.title}</td>
                       <td className="num">{line.qty}</td>
                       <td className="num">{line.cost === null ? '' : money(line.cost)}</td>
                       <td className="num">0</td>
