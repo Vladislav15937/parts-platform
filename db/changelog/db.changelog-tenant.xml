@@ -127,6 +127,7 @@
     <include file="tenant/108-donor-number.sql" relativeToChangelogFile="true"/>
     <include file="tenant/109-donor-form-fields.sql" relativeToChangelogFile="true"/>
     <include file="tenant/110-donor-status-list.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/111-part-applicability-bazon-bodies-motors.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>
