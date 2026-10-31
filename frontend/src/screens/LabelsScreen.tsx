@@ -11,6 +11,7 @@ import {
   scannable,
 } from '../labels/labels';
 import type { Cell, Label } from '../labels/labels';
+import { bySchema } from '../inventory/storageAddress';
 import { listWarehouses } from '../organization/warehouses';
 import type { Warehouse } from '../organization/warehouses';
 import { searchStock } from '../sales/sales';
@@ -208,6 +209,7 @@ export function LabelsScreen({ canPrint }: Props) {
                         {cell.code}
                         {cell.zone !== null && <span className="muted"> · {cell.zone}</span>}
                         {!cell.active && <span className="muted"> · закрыта</span>}
+                        {!bySchema(cell.code) && <span className="muted"> · не по схеме</span>}
                         {!scannable(cell.code) && (
                           <span className="muted"> · не кодируется</span>
                         )}

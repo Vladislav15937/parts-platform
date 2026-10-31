@@ -1282,6 +1282,19 @@ export function changePartCell(
   });
 }
 
+/**
+ * Поставить позицию на полку адресом «склад-зона-ряд-секция-полка»
+ * (задача 0368); `null` — снять. Отвечает записанным адресом.
+ */
+export function placePartOnShelf(
+  partId: number, section: string | null,
+): Promise<{ section: string | null }> {
+  return request<{ section: string | null }>(`/api/parts/${partId}/section`, {
+    method: 'PUT',
+    body: { section },
+  });
+}
+
 /** Позиция, которая не поехала пачкой: часть остатка обещана покупателю. */
 export interface MoveSkipped {
   partId: number;

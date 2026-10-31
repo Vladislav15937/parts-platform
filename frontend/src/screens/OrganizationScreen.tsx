@@ -16,6 +16,8 @@ import {
   type Warehouse,
 } from '../organization/warehouses';
 import { useMounted } from '../ui/useMounted';
+import { bySchema } from '../inventory/storageAddress';
+import { ShelfMarking } from './ShelfMarking';
 
 /**
  * Филиалы, склады и ячейки хранения.
@@ -42,6 +44,8 @@ export function OrganizationScreen() {
   const [opened, setOpened] = useState<number | null>(null);
   const [cells, setCells] = useState<Cell[]>([]);
   const [codes, setCodes] = useState('');
+  // «Маркировка полок склада» (задача 0368): для какого склада открыто окно.
+  const [marking, setMarking] = useState<number | null>(null);
 
   // Наличие склада в объявлении: текст и вилка дней заказа (задача 0008).
   const [availabilityFor, setAvailabilityFor] = useState<number | null>(null);
@@ -129,12 +133,29 @@ export function OrganizationScreen() {
                   >
                     {availabilityFor === warehouse.id ? 'Свернуть' : 'Наличие'}
                   </button>
+                  <button
+                    type="button"
+                    className="button--ghost"
+                    aria-label={`Маркировка полок: ${warehouse.name}`}
+                    onClick={() => setMarking(marking === warehouse.id ? null : warehouse.id)}
+                  >
+                    {marking === warehouse.id ? 'Свернуть' : 'Маркировка полок'}
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {marking !== null && (
+        <ShelfMarking
+          key={`marking-${marking}`}
+          warehouseId={marking}
+          warehouseName={warehouses.find((w) => w.id === marking)?.name ?? 'неизвестный склад'}
+          onClose={() => setMarking(null)}
+        />
+      )}
 
       {opened !== null && (
         <div className="card">
@@ -152,9 +173,20 @@ export function OrganizationScreen() {
                 >
                   {cell.code}
                   {!scannable(cell.code) && <span className="muted"> · не печатается</span>}
+                  {/* Прежние ячейки со свободным названием не переименовываются
+                      молча (задача 0368): они остаются и называются честно. */}
+                  {!bySchema(cell.code) && <span className="muted"> · не по схеме</span>}
                 </span>
               ))}
             </div>
+          )}
+
+          {cells.some((cell) => !bySchema(cell.code)) && (
+            <p className="note">
+              Ячейки, помеченные «не по схеме», записаны не адресом
+              «склад-зона-ряд-секция-полка» (01-01-03-01-02). Они работают
+              как раньше; адреса по схеме печатаются кнопкой «Маркировка полок».
+            </p>
           )}
 
           {/* Проверка смотрела только на то, что вводят сейчас, — а «Б-02-1»
