@@ -848,6 +848,45 @@ public class PartService {
     }
 
     /**
+     * Поставить позицию на полку адресом из пяти частей (задача 0368).
+     *
+     * <p>Адрес пишется в «Секцию» — туда же, где он лежит у переехавшего
+     * клиента, и туда же, откуда его читают колонка витрины и карточка.
+     * Заранее полка не заводится (решение владельца 19.10.2026 «Всё как
+     * у bazon», задача 0368): проверяется только запись по схеме,
+     * а «01-01-3-1-2» приводится к той же полке {@code 01-01-03-01-02}.
+     * Пусто — снять адрес; в базу это NULL, как у снятого штрихкода.
+     *
+     * <p>Через сущность, а не SQL: «Секция: было …, стало …» в ленту правок
+     * пишет слушатель Hibernate. Отметка об изменении нужна: по «Секции»
+     * отбирает выгрузка (отбор колонками прайса).
+     */
+    @Transactional
+    public PartSection placeOnShelf(Long partId, String typed, Long authorId) {
+        Part part = partRepository.findById(partId)
+                .orElseThrow(() -> NotFound.PART.error(partId));
+        String address = null;
+        if (typed != null && !typed.isBlank()) {
+            address = StorageAddress.parse(typed)
+                    .map(StorageAddress::text)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            ("Адрес «%s» не по схеме «склад-зона-ряд-секция-полка» — "
+                                    + "пять чисел через дефис, например %s")
+                                    .formatted(typed.strip(), StorageAddress.EXAMPLE)));
+        }
+        if (!java.util.Objects.equals(part.getSection(), address)) {
+            part.setSection(address);
+            part.touchedBy(authorId);
+            partChanges.changed(partId);
+        }
+        return new PartSection(address);
+    }
+
+    /** Адрес позиции после привязки; {@code null} — адреса нет. */
+    public record PartSection(String section) {
+    }
+
+    /**
      * Правка нескольких карточек разом.
      *
      * <p><b>Меняется только то, что владелец тронул.</b> Это главное отличие

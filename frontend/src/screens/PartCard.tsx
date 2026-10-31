@@ -23,6 +23,7 @@ import {
 import { cardFields, fitLabel } from '../inventory/partCard';
 import { deletePhoto, makeMainPhoto, photoArchiveUrl, uploadPhoto } from '../inventory/photos';
 import { PartCellBlock } from './PartCellBlock';
+import { PartShelfBlock } from './PartShelfBlock';
 import { PartQualityBlock } from './PartQualityBlock';
 import { PartEditForm } from './PartEditForm';
 import { PartLabelPrint } from './PartLabelPrint';
@@ -577,6 +578,14 @@ export function PartCard({ row, warehouses, rights, extraFields, applicability =
               warehouses={warehouses}
               stock={row.stock}
               reserved={row.reserved}
+              canPlace={rights.has('part.cell')}
+              onChanged={onChanged}
+            />
+            {/* Адрес из пяти частей в «Секцию» — вводом или сканом этикетки
+                полки (задача 0368). Та же роль, что у перестановки по ячейке. */}
+            <PartShelfBlock
+              partId={row.id}
+              section={row.section}
               canPlace={rights.has('part.cell')}
               onChanged={onChanged}
             />
