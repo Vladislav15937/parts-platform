@@ -79,6 +79,153 @@ function orNull(value: string): string | null {
   return value.trim() === '' ? null : value.trim();
 }
 
+/**
+ * «Общая информация» машины (задача 0364): номер донора, статус, описание
+ * для клиента, заметка, ссылка на видео и рестайлинг. Слова — с формы
+ * «Создание донора» ориентира. Одни на заведение и правку, как `DonorSpec`.
+ */
+export interface DonorExtra {
+  /** Строкой, как в поле; при заведении стоит предложенный. */
+  number: string;
+  /** Номер статуса строкой; пусто — «не задан». */
+  statusId: string;
+  clientDescription: string;
+  note: string;
+  videoUrl: string;
+  restyling: string;
+}
+
+export const EMPTY_EXTRA: DonorExtra = {
+  number: '',
+  statusId: '',
+  clientDescription: '',
+  note: '',
+  videoUrl: '',
+  restyling: '',
+};
+
+/** Номер донора — целое больше нуля; иначе форма скажет до отправки. */
+export function numberBad(value: string): boolean {
+  return value.trim() !== '' && !/^0*[1-9]\d{0,17}$/.test(value.trim());
+}
+
+/**
+ * Ссылка на видео — то же правило, что у сервера (`DonorEditService.videoUrl`):
+ * что-то с точкой и без пробелов. Сервер всё равно проверит; здесь — чтобы
+ * сказать до отправки, а не после.
+ */
+export function videoBad(value: string): boolean {
+  return value.trim() !== '' && !/^(https?:\/\/)?[^\s/]+\.\S+$/i.test(value.trim());
+}
+
+/**
+ * Поля «Общей информации» — в значения запроса, кроме номера: его форма
+ * заведения шлёт, только если человек его изменил (предложенный номер
+ * — подсмотр, и две открытые формы показали бы одно число).
+ */
+export function extraToFields(extra: DonorExtra): Pick<DonorFields,
+    'statusId' | 'clientDescription' | 'note' | 'videoUrl' | 'restyling'> {
+  return {
+    statusId: extra.statusId === '' ? null : Number(extra.statusId),
+    clientDescription: orNull(extra.clientDescription),
+    note: orNull(extra.note),
+    videoUrl: orNull(extra.videoUrl),
+    restyling: orNull(extra.restyling),
+  };
+}
+
+function extraOf(form: DonorFields): DonorExtra {
+  return {
+    number: form.number === null || form.number === undefined ? '' : String(form.number),
+    statusId: form.statusId === null || form.statusId === undefined ? '' : String(form.statusId),
+    clientDescription: form.clientDescription ?? '',
+    note: form.note ?? '',
+    videoUrl: form.videoUrl ?? '',
+    restyling: form.restyling ?? '',
+  };
+}
+
+/**
+ * Номер, статус, описание и заметка — верх формы, как «Общая информация»
+ * у ориентира. Рестайлинг и видео стоят ниже, среди параметров машины
+ * (`DonorRestylingField`, `DonorVideoField`): там их ищет пришедший с Bazon.
+ */
+export function DonorInfoFields({ extra, onChange, vocabulary, suggested }: {
+  extra: DonorExtra;
+  onChange: (next: DonorExtra) => void;
+  vocabulary: VocabularyState;
+  /** Предложенный номер: подпись, что он подставлен, а не выбран. */
+  suggested?: number | null;
+}) {
+  const set = (patch: Partial<DonorExtra>) => onChange({ ...extra, ...patch });
+  return (
+    <>
+      <div className="row">
+        <label>
+          Номер донора
+          <input inputMode="numeric" value={extra.number}
+                 placeholder={suggested === null || suggested === undefined ? '' : String(suggested)}
+                 onChange={(e) => set({ number: e.target.value })} />
+        </label>
+        <Choice label="Статус" value={extra.statusId}
+                options={vocabulary} pick={(v) => v.statuses}
+                onChange={(statusId) => set({ statusId })} />
+      </div>
+      {numberBad(extra.number) && (
+        <p className="note note--error">Номер донора — целое число больше нуля</p>
+      )}
+      <label>
+        Описание (для клиента)
+        <textarea rows={3} value={extra.clientDescription}
+                  onChange={(e) => set({ clientDescription: e.target.value })} />
+      </label>
+      <label>
+        Заметка (для вас)
+        <input value={extra.note} onChange={(e) => set({ note: e.target.value })} />
+      </label>
+    </>
+  );
+}
+
+export function DonorRestylingField({ extra, onChange }: {
+  extra: DonorExtra;
+  onChange: (next: DonorExtra) => void;
+}) {
+  return (
+    <label>
+      Рестайлинг
+      <input value={extra.restyling} placeholder="1 рест."
+             onChange={(e) => onChange({ ...extra, restyling: e.target.value })} />
+    </label>
+  );
+}
+
+export function DonorVideoField({ extra, onChange }: {
+  extra: DonorExtra;
+  onChange: (next: DonorExtra) => void;
+}) {
+  return (
+    <>
+      <label>
+        Ссылка на видео
+        <input value={extra.videoUrl} placeholder="https://youtu.be/…" inputMode="url"
+               autoCapitalize="none" autoCorrect="off"
+               onChange={(e) => onChange({ ...extra, videoUrl: e.target.value })} />
+      </label>
+      {videoBad(extra.videoUrl) && (
+        <p className="note note--error">
+          Ссылка на видео не похожа на адрес — вставьте ссылку целиком
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Есть ли в «Общей информации» то, с чем форму отправлять нельзя. */
+export function extraBad(extra: DonorExtra): boolean {
+  return numberBad(extra.number) || videoBad(extra.videoUrl);
+}
+
 export function DonorSpecFields({ spec, onChange, vocabulary }: {
   spec: DonorSpec;
   onChange: (next: DonorSpec) => void;
@@ -187,7 +334,7 @@ export function DonorCard({ donorId, vocabulary, online, onParts, onSaved }: {
   const [bodyCode, setBodyCode] = useState('');
   const [engineCode, setEngineCode] = useState('');
   const [vin, setVin] = useState('');
-  const [note, setNote] = useState('');
+  const [extra, setExtra] = useState<DonorExtra>(EMPTY_EXTRA);
   const [spec, setSpec] = useState<DonorSpec>(EMPTY_SPEC);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -239,6 +386,7 @@ export function DonorCard({ donorId, vocabulary, online, onParts, onSaved }: {
         </>
       ) : (
         <>
+          <DonorInfoFields extra={extra} onChange={setExtra} vocabulary={vocabulary} />
           <div className="row">
             <label>
               Год
@@ -257,21 +405,20 @@ export function DonorCard({ donorId, vocabulary, online, onParts, onSaved }: {
             </label>
           </div>
           {yearBad && <p className="note note--error">Год — четыре цифры</p>}
+          <DonorRestylingField extra={extra} onChange={setExtra} />
           <DonorSpecFields spec={spec} onChange={setSpec} vocabulary={vocabulary} />
           <label>
             VIN
             <input value={vin} placeholder="17 символов" autoCapitalize="characters"
                    autoCorrect="off" onChange={(e) => setVin(e.target.value.toUpperCase())} />
           </label>
-          <label>
-            Примечание
-            <input value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
+          <DonorVideoField extra={extra} onChange={setExtra} />
           {message !== null && <p className="note note--error">{message}</p>}
           {!online && <p className="note note--error">Нет связи — сохранить нельзя.</p>}
           <div className="filter-row">
             <button type="button"
-                    disabled={saving || !online || yearBad || mileageBad(spec.mileage)}
+                    disabled={saving || !online || yearBad || mileageBad(spec.mileage)
+                              || extraBad(extra)}
                     onClick={() => void save(form)}>
               {saving ? 'Сохраняем…' : 'Сохранить'}
             </button>
@@ -291,7 +438,7 @@ export function DonorCard({ donorId, vocabulary, online, onParts, onSaved }: {
     setBodyCode(form.bodyCode ?? '');
     setEngineCode(form.engineCode ?? '');
     setVin(form.vin ?? '');
-    setNote(form.note ?? '');
+    setExtra(extraOf(form));
     setSpec(specOf(form));
     setMessage(null);
     setEditing(true);
@@ -307,8 +454,10 @@ export function DonorCard({ donorId, vocabulary, online, onParts, onSaved }: {
         bodyCode: orNull(bodyCode),
         engineCode: orNull(engineCode),
         vin: orNull(vin),
-        note: orNull(note),
         ...specToFields(spec),
+        ...extraToFields(extra),
+        // Пустое — «не менять»: снять номер у машины нельзя, сервер его оставит.
+        number: extra.number.trim() === '' ? null : Number(extra.number.trim()),
       });
       if (!mounted.current) return;
       setDetails(saved);

@@ -64,7 +64,7 @@ describe('обрезанные списки отчётов', () => {
       }
       return json({
         totals: { donors: 441, totalCost: 230000, revenue: 6500, stockValue: 96308477 },
-        rows: rows(50, (i) => ({ donorId: i, publicCode: `D${i}`, legacyCode: String(i),
+        rows: rows(50, (i) => ({ donorId: i, number: 500 + i, publicCode: `D${i}`, legacyCode: String(i),
                                  note: null, vin: null, year: 2007, totalCost: 0,
                                  revenue: 0, profit: 0, partsTotal: 10, partsSold: 0,
                                  stockValue: 1000 })),
@@ -87,6 +87,17 @@ describe('обрезанные списки отчётов', () => {
       screen.getByText(/Показаны 50 машин из 441/)).toBeTruthy());
     // И чем обрезано: без этого порядок строк выглядит случайным.
     expect(screen.getByText(/самые убыточные/)).toBeTruthy();
+  });
+
+  // Задача 0364: машина названа номером донора, а не шестнадцатеричным
+  // кодом; прежний номер Bazon стоит рядом, когда он с номером не совпадает.
+  // Фикстура несёт `publicCode` нарочно — как ответ, где поле ещё есть.
+  it('машина названа номером донора, а не кодом', async () => {
+    render(<ReportsScreen canRead />);
+
+    await waitFor(() => expect(screen.getByText('№501')).toBeTruthy());
+    expect(screen.queryByText('D1')).toBeNull();
+    expect(screen.getByText('№501').parentElement?.textContent).toContain(' · 1');
   });
 
   it('расчёты с клиентами — тоже', async () => {

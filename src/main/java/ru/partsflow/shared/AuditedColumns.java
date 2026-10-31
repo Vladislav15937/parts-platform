@@ -279,7 +279,7 @@ public final class AuditedColumns {
         DONOR.put("supply_id", "Поставка");
         DONOR.put("purchase_date", "Дата покупки");
         DONOR.put("supplier_name", "Продавец машины");
-        DONOR.put("note", "Примечание");
+        DONOR.put("note", "Заметка (для вас)");
         // Задача 0364: машину правят формой после заведения, и правка марки,
         // руля или коробки без этих строк в журнал не попала бы вовсе —
         // слушатель сравнивает только названные здесь колонки. Подписи — те,
@@ -292,6 +292,20 @@ public final class AuditedColumns {
         DONOR.put("transmission_model", "Модель КПП");
         DONOR.put("drive_type", "Привод");
         DONOR.put("equipment_code", "Комплектация");
+        // Задача 0364, вторая часть: номер, статус из списка клиента и поля
+        // формы «Создание донора». Подписи — те, что на форме.
+        DONOR.put("number", "Номер донора");
+        DONOR.put("status_id", "Статус");
+        DONOR.put("restyling", "Рестайлинг");
+        DONOR.put("client_description", "Описание (для клиента)");
+        DONOR.put("video_url", "Ссылка на видео");
+    }
+
+    /** Список статусов машины (задача 0364), правит {@code DonorStatusService}. */
+    public static final Map<String, String> DONOR_STATUS = new LinkedHashMap<>();
+
+    static {
+        DONOR_STATUS.put("name", "Название");
     }
 
     public static final Map<String, String> SUPPLY = new LinkedHashMap<>();
@@ -474,6 +488,7 @@ public final class AuditedColumns {
             case "tenant_member" -> TENANT_MEMBER;
             case "company_setting" -> COMPANY_SETTING;
             case "access_role" -> ACCESS_ROLE;
+            case "donor_status" -> DONOR_STATUS;
             default -> Map.of();
         };
     }
@@ -554,7 +569,9 @@ public final class AuditedColumns {
             "storage_cell_id", "donor_id", "part_kind_id", "supply_id",
             "customer_id", "manager_id", "payment_source_id",
             // Машина донора: справочник машин общий, имя берётся оттуда (0364).
-            "brand_id", "model_id", "generation_id");
+            "brand_id", "model_id", "generation_id",
+            // Статус машины из списка клиента (0364) — словом из списка.
+            "status_id");
 
     /**
      * Состояние — словарём самого перечисления, а не копией здесь
@@ -694,9 +711,10 @@ public final class AuditedColumns {
         }
         String sql = switch (column) {
             case "storage_cell_id" -> "SELECT id, code AS title FROM storage_cell WHERE id IN (%s)";
-            case "donor_id" -> """
-                    SELECT id, coalesce(legacy_code, public_code) AS title
-                      FROM donor WHERE id IN (%s)""";
+            // Номер донора (задача 0364): внутренний public_code владелец
+            // не видел нигде, кроме этой строки журнала.
+            case "donor_id" -> "SELECT id, number::text AS title FROM donor WHERE id IN (%s)";
+            case "status_id" -> "SELECT id, name AS title FROM donor_status WHERE id IN (%s)";
             case "part_kind_id" ->
                     "SELECT id, name AS title FROM catalog.part_kind WHERE id IN (%s)";
             case "supply_id" ->

@@ -458,9 +458,9 @@ class SoldItemsReportTest extends PostgresTestBase {
 
     private Long donor(String code, String legacy, String note) {
         return jdbc.queryForObject("""
-                INSERT INTO donor (public_code, legacy_code, brand_id, note, status)
-                VALUES (?, ?, (SELECT id FROM catalog.brand ORDER BY id LIMIT 1), ?, 'DISMANTLING')
-                RETURNING id""", Long.class, code, legacy, note);
+                INSERT INTO donor (public_code, legacy_code, number, brand_id, note, status)
+                VALUES (?, ?, ?::bigint, (SELECT id FROM catalog.brand ORDER BY id LIMIT 1), ?, 'DISMANTLING')
+                RETURNING id""", Long.class, code, legacy, legacy, note);
     }
 
     private Long part(String title, int price, Integer cost, Long donorId, Long supplyId) {

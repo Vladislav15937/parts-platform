@@ -55,26 +55,28 @@ public class DonorDirectory {
     }
 
     private static final String LIST = """
-            SELECT d.id, d.public_code, d.legacy_code, d.vin, d.year, d.status, d.note,
-                   d.location,
+            SELECT d.id, d.number, d.vin, d.year, d.status, d.note,
+                   d.location, ds.name AS status_name,
                    b.name AS brand, m.name AS model
               FROM donor d
               LEFT JOIN catalog.brand b ON b.id = d.brand_id
-              LEFT JOIN catalog.model m ON m.id = d.model_id""";
+              LEFT JOIN catalog.model m ON m.id = d.model_id
+              LEFT JOIN donor_status ds ON ds.id = d.status_id""";
 
     private static final RowMapper<Entry> ROW = (rs, i) -> new Entry(
             rs.getLong("id"),
-            // Тот же выбор, что в карточке машины и в отчёте
-            // окупаемости: клиент зовёт машину своим номером.
-            rs.getString("legacy_code") == null
-                    ? rs.getString("public_code") : rs.getString("legacy_code"),
+            // Номер донора (tenant/108): у перенесённой — её номер из Bazon,
+            // у заведённой у нас — порядковый. Внутренний public_code
+            // наружу не уходит (задача 0364, п. 6).
+            rs.getString("number"),
             rs.getString("brand"),
             rs.getString("model"),
             rs.getObject("year") == null ? null : rs.getInt("year"),
             rs.getString("vin"),
             rs.getString("status"),
             rs.getString("note"),
-            rs.getString("location"));
+            rs.getString("location"),
+            rs.getString("status_name"));
 
     /**
      * Машина, с которой снята позиция, — для её карточки.
@@ -120,10 +122,11 @@ public class DonorDirectory {
      * и число на плитке разошлось бы с числом строк, к которым оно ведёт.
      */
     private static final String CARD = """
-            SELECT d.id, d.public_code, d.legacy_code, d.status, d.location, d.vin,
+            SELECT d.id, d.number, d.status, d.location, d.vin,
                    d.year, d.body_code, d.engine_code, d.steering, d.drive_type,
                    d.transmission_type, d.transmission_model, d.color, d.color_code,
                    d.equipment_code, d.mileage_km, d.note,
+                   d.restyling, d.client_description, d.video_url, ds.name AS status_name,
                    b.name AS brand, m.name AS model, g.name AS generation,
                    s.kind AS supply_kind, s.number AS supply_number,
                    (SELECT count(*) FROM part sibling
@@ -133,7 +136,8 @@ public class DonorDirectory {
               LEFT JOIN catalog.brand b      ON b.id = d.brand_id
               LEFT JOIN catalog.model m      ON m.id = d.model_id
               LEFT JOIN catalog.generation g ON g.id = d.generation_id
-              LEFT JOIN supply s             ON s.id = d.supply_id""";
+              LEFT JOIN supply s             ON s.id = d.supply_id
+              LEFT JOIN donor_status ds      ON ds.id = d.status_id""";
 
     private static final Map<String, String> STATUSES = Map.of(
             "PURCHASED", "Куплена", "DISMANTLING", "В разборе",
@@ -141,10 +145,8 @@ public class DonorDirectory {
 
     private static final RowMapper<Card> CARD_ROW = (rs, i) -> new Card(
                 rs.getLong("id"),
-                // Клиент помнит машину по своему номеру, а не по нашему:
-                // в отчёте окупаемости это уже учтено, тут то же самое.
-                rs.getString("legacy_code") == null
-                        ? rs.getString("public_code") : rs.getString("legacy_code"),
+                // Номер донора — тот же, что в списке машин и в колонке склада.
+                rs.getString("number"),
                 label(STATUSES, rs.getString("status")),
                 supply(rs.getString("supply_kind"), rs.getString("supply_number")),
                 rs.getString("brand"),
@@ -163,7 +165,11 @@ public class DonorDirectory {
                 rs.getString("vin"),
                 rs.getString("location"),
                 rs.getString("note"),
-                rs.getInt("parts_count"));
+                rs.getInt("parts_count"),
+                rs.getString("status_name"),
+                rs.getString("restyling"),
+                rs.getString("client_description"),
+                rs.getString("video_url"));
 
     /**
      * Поставка словами, а не кодом.
@@ -216,24 +222,30 @@ public class DonorDirectory {
     }
 
     /**
-     * @param code номер, которым машину зовёт клиент: свой, если он есть,
-     *             и наш внутренний, если машину завели уже у нас
+     * @param code       номер донора ({@code donor.number}): у перенесённой —
+     *                   её номер из Bazon, у заведённой у нас — порядковый
+     * @param statusName статус из списка клиента ({@code donor_status});
+     *                   {@code status} рядом — состояние приёмки кодом
      */
     public record Entry(long id, String code, String brand, String model,
                         Integer year, String vin, String status, String note,
-                        String location) {
+                        String location, String statusName) {
     }
 
     /**
      * @param code       номер, которым машину зовёт клиент
      * @param partsCount сколько деталей с неё снято — по этому числу видно,
      *                   разобрана машина или только начата
+     * @param statusName статус из списка клиента; {@code status} — состояние
+     *                   приёмки словом («В разборе»)
      */
     public record Card(long id, String code, String status, String supply,
                        String brand, String model, String generation,
                        String bodyCode, String engineCode, Integer year,
                        String steering, String transmission, String driveType,
                        String color, String equipmentCode, Integer mileageKm,
-                       String vin, String location, String note, int partsCount) {
+                       String vin, String location, String note, int partsCount,
+                       String statusName, String restyling, String clientDescription,
+                       String videoUrl) {
     }
 }

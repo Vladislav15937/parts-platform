@@ -411,6 +411,15 @@ export interface PartDonor {
   note: string | null;
   /** Сколько деталей снято с этой машины. */
   partsCount: number;
+  /**
+   * Задача 0364: статус из списка компании, рестайлинг, описание для
+   * клиента и ссылка на видео. Необязательны в типе — ответ сборки
+   * до задачи их не несёт, и карточка от этого падать не должна.
+   */
+  statusName?: string | null;
+  restyling?: string | null;
+  clientDescription?: string | null;
+  videoUrl?: string | null;
 }
 
 /** Машина позиции; ошибка — донор не задан. */
