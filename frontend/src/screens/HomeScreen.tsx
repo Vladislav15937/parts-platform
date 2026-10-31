@@ -251,6 +251,7 @@ export function HomeScreen() {
             reference={status.reference}
             online={connected}
             canExpect={rights.has('supply.expected')}
+            canRecordCost={rights.has('donor.costs')}
             onDonorParts={(donorCode) => {
               setDonorFilter(donorCode);
               setTab('catalog');

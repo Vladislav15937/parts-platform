@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { ApiError, request } from '../api/client';
 import {
   generationForYear,
@@ -15,10 +15,17 @@ import type { Reference } from '../reference/reference';
 import { DonorCosts } from './DonorCosts';
 import {
   DonorCard,
+  DonorInfoFields,
+  DonorRestylingField,
   DonorSpecFields,
+  DonorVideoField,
+  EMPTY_EXTRA,
   EMPTY_SPEC,
+  extraBad,
+  extraToFields,
   mileageBad,
   specToFields,
+  type DonorExtra,
   type DonorSpec,
   type VocabularyState,
 } from './DonorCard';
@@ -28,6 +35,7 @@ import {
   donorVocabulary,
   moveDonor,
   listDonors,
+  nextDonorNumber,
   registerSupply,
   startDismantling,
   statusTitle,
@@ -60,10 +68,16 @@ interface Props {
   canExpect?: boolean;
   /** «N запчастей — Посмотреть»: открыть склад с отбором по машине (задача 0364). */
   onDonorParts?: (donorCode: string) => void;
+  /**
+   * Право «Записывать затраты по машине»: «Стоимость» ложится закупкой
+   * в журнал затрат (ответ владельца 31.10.2026), и без права сервер её
+   * отобьёт — поле такому сотруднику не показывается вовсе.
+   */
+  canRecordCost?: boolean;
 }
 
 export function DonorScreen({
-  reference, online, onChanged, canExpect = false, onDonorParts,
+  reference, online, onChanged, canExpect = false, onDonorParts, canRecordCost = false,
 }: Props) {
   // Затраты вносятся по уже заведённой машине: до её появления вкладывать
   // не во что, а после — покупка, эвакуатор и разбор идут отдельными
@@ -99,8 +113,15 @@ export function DonorScreen({
   const [vin, setVin] = useState('');
   const [scanning, setScanning] = useState(false);
   const [supplyId, setSupplyId] = useState<number | null>(null);
-  const [note, setNote] = useState('');
   const [spec, setSpec] = useState<DonorSpec>(EMPTY_SPEC);
+  const [extra, setExtra] = useState<DonorExtra>(EMPTY_EXTRA);
+  // «Стоимость» только при заведении: дальше покупка — запись журнала затрат,
+  // и правят её там, а не в форме машины.
+  const [cost, setCost] = useState('');
+  // Предложенный номер донора: наибольший плюс один (задача 0364). Не
+  // приехал — поле пустое, и номер выдаст сервер при заведении.
+  const [suggested, setSuggested] = useState<number | null>(null);
+  const suggestedRef = useRef<number | null>(null);
 
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -112,6 +133,10 @@ export function DonorScreen({
   // и только что купленной машины в нём нет.
   useEffect(() => {
     void reloadDonors();
+  }, []);
+
+  useEffect(() => {
+    void suggestNumber();
   }, []);
 
   useEffect(() => {
@@ -181,6 +206,28 @@ export function DonorScreen({
     <section className="card">
       <h2>Машина</h2>
 
+      <DonorInfoFields extra={extra} onChange={setExtra} vocabulary={vocabulary}
+                       suggested={suggested} />
+
+      {canRecordCost && (
+        <>
+          <label>
+            Стоимость
+            <input
+              inputMode="decimal"
+              value={cost}
+              placeholder="необязательно"
+              onChange={(e) => setCost(e.target.value.replace(',', '.'))}
+            />
+          </label>
+          {costBad(cost) ? (
+            <p className="note note--error">Стоимость — число не меньше нуля</p>
+          ) : (
+            <p className="note">Запишется в затраты машины покупкой</p>
+          )}
+        </>
+      )}
+
       <label>
         Марка
         <input
@@ -243,7 +290,7 @@ export function DonorScreen({
           <select
             value={generationId ?? ''}
             onChange={(e) =>
-              setGenerationId(e.target.value === '' ? null : Number(e.target.value))
+              chooseGeneration(e.target.value === '' ? null : Number(e.target.value))
             }
             disabled={generations.length === 0}
           >
@@ -256,6 +303,11 @@ export function DonorScreen({
           </select>
         </label>
       </div>
+
+      {/* Рестайлинг — свободным текстом: справочник его не знает
+          (`is_restyling` пуст у всех поколений). Сбрасывается сменой
+          поколения, как у ориентира. */}
+      <DonorRestylingField extra={extra} onChange={setExtra} />
 
       {/* Кузов и двигатель приёмщик списывает с документов машины. По ним
           подбирают деталь по телефону — «подойдёт ли на JZX110» — и они же
@@ -309,6 +361,8 @@ export function DonorScreen({
       <button type="button" className="button--ghost" onClick={() => setScanning(true)}>
         Сканировать VIN
       </button>
+
+      <DonorVideoField extra={extra} onChange={setExtra} />
 
       <label>
         Поставка
@@ -375,11 +429,6 @@ export function DonorScreen({
         </button>
       </details>
 
-      <label>
-        Примечание
-        <input value={note} onChange={(e) => setNote(e.target.value)} />
-      </label>
-
       {message !== null && <p className="note">{message}</p>}
 
       {!online && (
@@ -391,7 +440,8 @@ export function DonorScreen({
 
       <button
         type="button"
-        disabled={!online || sending || brand === null || vinBad || mileageBad(spec.mileage)}
+        disabled={!online || sending || brand === null || vinBad || mileageBad(spec.mileage)
+                  || extraBad(extra) || (canRecordCost && costBad(cost))}
         onClick={() => void submit()}
       >
         {sending ? 'Заводим…' : 'Завести машину'}
@@ -615,18 +665,48 @@ export function DonorScreen({
     setBrand(picked);
     setBrandInput(picked.name);
     setModelId(null);
-    setGenerationId(null);
+    chooseGeneration(null);
   }
 
   function pickModel(id: number | null): void {
     setModelId(id);
     // Год уже введён — поколение подставится само, менять его руками незачем.
-    setGenerationId(matchGeneration(id, year));
+    chooseGeneration(matchGeneration(id, year));
   }
 
   function changeYear(value: string): void {
     setYear(value);
-    setGenerationId(matchGeneration(modelId, value));
+    chooseGeneration(matchGeneration(modelId, value));
+  }
+
+  /**
+   * Рестайлинг принадлежит поколению: сменилось поколение — вписанный
+   * рестайлинг про другую машину, и ориентир его стирает («Будет удалено»).
+   */
+  function chooseGeneration(id: number | null): void {
+    if (id !== generationId) {
+      setExtra((was) => ({ ...was, restyling: '' }));
+    }
+    setGenerationId(id);
+  }
+
+  /**
+   * Подставляет следующий номер — если человек не вписал свой. Свой не
+   * трогаем: перечитывание после заведения не должно стирать набранное.
+   */
+  async function suggestNumber(): Promise<void> {
+    try {
+      const next = await nextDonorNumber();
+      if (!mounted.current) return;
+      const was = suggestedRef.current;
+      suggestedRef.current = next;
+      setSuggested(next);
+      setExtra((form) => (form.number === '' || form.number === String(was)
+        ? { ...form, number: String(next) } : form));
+    } catch {
+      // Номер не подсказан — поле пустое, сервер выдаст следующий сам.
+      if (mounted.current) setSuggested(null);
+    }
   }
 
   /**
@@ -718,8 +798,12 @@ export function DonorScreen({
     }
     setSending(true);
     setMessage(null);
+    // Номер уезжает, только если его изменили: предложенный — подсмотр,
+    // и две открытые формы показали бы одно число; выдаёт его сервер.
+    const typed = extra.number.trim();
+    const number = typed === '' || Number(typed) === suggested ? null : Number(typed);
     try {
-      const created = await request<{ publicCode: string }>('/api/intake/donors', {
+      const created = await request<{ number: number }>('/api/intake/donors', {
         method: 'POST',
         body: {
           brandId: brand.id,
@@ -731,12 +815,14 @@ export function DonorScreen({
           vin: vin.trim() === '' ? null : vin.trim(),
           ...specToFields(spec),
           supplyId,
-          note: note.trim() === '' ? null : note.trim(),
+          ...extraToFields(extra),
+          number,
+          cost: canRecordCost && cost.trim() !== '' ? Number(cost) : null,
         },
       });
 
       if (!mounted.current) return;
-      setMessage(`Машина заведена: ${created.publicCode}`);
+      setMessage(`Машина заведена: №${created.number}`);
       onChanged();
       void reloadDonors();
       // Марку оставляем: партию однотипных машин заводят подряд.
@@ -746,14 +832,23 @@ export function DonorScreen({
       setBodyCode('');
       setEngineCode('');
       setVin('');
-      setNote('');
       setSpec(EMPTY_SPEC);
+      setExtra(EMPTY_EXTRA);
+      setCost('');
+      void suggestNumber();
     } catch (cause) {
       if (mounted.current) setMessage(describe(cause, 'Машина не заведена'));
     } finally {
       if (mounted.current) setSending(false);
     }
   }
+}
+
+/** Пусто — затраты не заводятся; иначе число не меньше нуля, как у журнала затрат. */
+function costBad(value: string): boolean {
+  if (value.trim() === '') return false;
+  const parsed = Number(value);
+  return !Number.isFinite(parsed) || parsed < 0;
 }
 
 function describe(cause: unknown, fallback: string): string {

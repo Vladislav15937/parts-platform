@@ -265,7 +265,20 @@ export interface DonorFields {
   vin: string | null;
   mileageKm: number | null;
   supplyId: number | null;
+  /** «Заметка (для вас)»: видит только компания, в объявление не идёт. */
   note: string | null;
+  /**
+   * Номер донора (задача 0364) — тот, которым машину зовёт клиент. В правке
+   * `null` — «не менять»: снять номер у машины нельзя.
+   */
+  number: number | null;
+  /** Рестайлинг свободным текстом («1 рест.»): справочник его не знает. */
+  restyling: string | null;
+  /** «Описание (для клиента)» — текст для объявления. */
+  clientDescription: string | null;
+  videoUrl: string | null;
+  /** Статус из списка компании; `null` — не задан. */
+  statusId: number | null;
 }
 
 /** Карточка машины: словами для показа и кодами для правки. */
@@ -317,6 +330,8 @@ export interface DonorVocabulary {
   steering: DonorOption[];
   transmission: DonorOption[];
   drive: DonorOption[];
+  /** Статусы машины из списка компании; код — номер статуса строкой. */
+  statuses: DonorOption[];
 }
 
 export async function donorVocabulary(): Promise<DonorVocabulary> {
@@ -328,5 +343,50 @@ export async function donorVocabulary(): Promise<DonorVocabulary> {
     steering: list(words?.steering),
     transmission: list(words?.transmission),
     drive: list(words?.drive),
+    statuses: list(words?.statuses),
   };
+}
+
+/**
+ * Какой номер подставить в форму новой машины: наибольший плюс один,
+ * а не очередное значение нумерации — вписанный руками или перенесённый
+ * с Bazon номер нумерацию не двигает (задача 0364). Подсмотр, а не выдача:
+ * форма шлёт номер, только если человек его изменил.
+ */
+export async function nextDonorNumber(): Promise<number> {
+  const found = await request<{ number?: unknown } | null>('/api/intake/donors/next-number');
+  // Ответ — обещание, а не гарантия: без числа поле останется пустым,
+  // а не покажет «undefined».
+  if (typeof found?.number !== 'number') throw new Error('номер не пришёл');
+  return found.number;
+}
+
+/** Строка списка «Статусы машин» в настройках. */
+export interface DonorStatusEntry {
+  id: number;
+  name: string;
+  /** У скольких машин выбран — удалить можно только невыбранный. */
+  donors: number;
+}
+
+export function listDonorStatuses(): Promise<DonorStatusEntry[]> {
+  return request<DonorStatusEntry[]>('/api/intake/donor-statuses');
+}
+
+export function addDonorStatus(name: string): Promise<DonorStatusEntry[]> {
+  return request<DonorStatusEntry[]>('/api/intake/donor-statuses', {
+    method: 'POST', body: { name },
+  });
+}
+
+export function renameDonorStatus(id: number, name: string): Promise<DonorStatusEntry[]> {
+  return request<DonorStatusEntry[]>(`/api/intake/donor-statuses/${id}`, {
+    method: 'PUT', body: { name },
+  });
+}
+
+export function removeDonorStatus(id: number): Promise<DonorStatusEntry[]> {
+  return request<DonorStatusEntry[]>(`/api/intake/donor-statuses/${id}`, {
+    method: 'DELETE',
+  });
 }

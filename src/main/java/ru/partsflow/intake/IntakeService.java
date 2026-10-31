@@ -62,6 +62,10 @@ public class IntakeService {
     private final ru.partsflow.inventory.PartIdentity identity;
     private final ru.partsflow.inventory.StockDocumentHistory history;
 
+    private final DonorNumbers donorNumbers;
+    private final DonorStatusService donorStatuses;
+    private final DonorCostService donorCosts;
+
     public IntakeService(SupplyRepository supplies,
                          DonorRepository donors,
                          PartRepository parts,
@@ -77,8 +81,14 @@ public class IntakeService {
                          ru.partsflow.inventory.CatalogService catalog,
                          ru.partsflow.catalog.BazonVehicles bazonVehicles,
                          ru.partsflow.inventory.PartIdentity identity,
-                         ru.partsflow.inventory.StockDocumentHistory history) {
+                         ru.partsflow.inventory.StockDocumentHistory history,
+                         DonorNumbers donorNumbers,
+                         DonorStatusService donorStatuses,
+                         DonorCostService donorCosts) {
+        this.donorCosts = donorCosts;
         this.history = history;
+        this.donorNumbers = donorNumbers;
+        this.donorStatuses = donorStatuses;
         this.bazonVehicles = bazonVehicles;
         this.identity = identity;
         this.catalog = catalog;
@@ -139,9 +149,37 @@ public class IntakeService {
 
     // ---------- доноры ----------
 
-    /** Заводит машину и привязывает её к поставке, если та указана. */
+    /**
+     * Заводит машину и привязывает её к поставке, если та указана.
+     *
+     * <p>Номер — вписанный (если свободен) или следующий за наибольшим
+     * ({@link DonorNumbers}); блокировка номера держится до коммита этой
+     * транзакции, то есть до записи машины.
+     */
     @Transactional
     public Donor registerDonor(Donor donor, Long supplyId, Long authorId) {
+        return registerDonor(donor, supplyId, null, authorId);
+    }
+
+    /**
+     * То же, со «Стоимостью» из формы «Создание донора»: она пишется закупкой
+     * («Покупка») в журнал затрат машины и входит в окупаемость — ответ владельца
+     * 31.10.2026 (задача 0364), отдельной колонки у машины нет. Одной транзакцией
+     * с машиной: отказ затраты (отрицательная сумма) не оставляет машины без неё.
+     * Пусто — затрата не заводится.
+     *
+     * <p>{@code @Transactional} у перегрузки свой: аннотация не наследуется,
+     * а блокировка номера донора требует внешней транзакции.
+     */
+    @Transactional
+    public Donor registerDonor(Donor donor, Long supplyId, java.math.BigDecimal cost,
+                               Long authorId) {
+        if (donor.getStatusId() != null) {
+            donorStatuses.require(donor.getStatusId());
+        }
+        donor.setVideoUrl(DonorEditService.videoUrl(donor.getVideoUrl()));
+        donor.setRestyling(DonorEditService.text(donor.getRestyling()));
+        donor.setClientDescription(DonorEditService.text(donor.getClientDescription()));
         if (supplyId != null) {
             requireSupply(supplyId);
             donor.arrivedWith(supplyId);
@@ -150,7 +188,12 @@ public class IntakeService {
             donor.setGenerationId(vehicles.generationFor(donor.getModelId(), donor.getYear()));
         }
         donor.setCreatedBy(authorId);
-        return donors.saveAndFlush(donor);
+        donor.setNumber(donorNumbers.assign(donor.getNumber(), null));
+        Donor saved = donors.saveAndFlush(donor);
+        if (cost != null) {
+            donorCosts.add(saved.getId(), "PURCHASE", cost, null, null, authorId);
+        }
+        return saved;
     }
 
     /** Меняет локацию машины в логистической цепочке. Стадия разбора не двигается. */

@@ -396,7 +396,14 @@ public class CatalogService {
                 + "', '" + ru.partsflow.catalog.MixedAlphabet.SQL_LATIN + "')";
     }
     static final String VEHICLE_YEAR = PartVehicle.year("d.year");
-    static final String DONOR_CODE = PartVehicle.donorCode("d.legacy_code, d.public_code");
+    /**
+     * «Номер донора»: своё у позиции, иначе номер машины (tenant/108). До задачи
+     * 0364 здесь стоял {@code coalesce(legacy_code, public_code)} — у машины,
+     * заведённой у нас, это шестнадцатеричный внутренний код, которого
+     * владелец не видел нигде. Тем же выражением ищет «Посмотреть» из карточки
+     * машины: число на плитке и строки, к которым оно ведёт, обязаны сойтись.
+     */
+    static final String DONOR_CODE = PartVehicle.donorCode("d.number::text");
     /**
      * Когда поколение своей машины показывается: оно одно (0290) и, если
      * в наименовании стоит номер кузова, кузова поколения его подтверждают
