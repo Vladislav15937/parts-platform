@@ -117,7 +117,7 @@ describe('форма машины: номер донора и общая инф�
     expect(posted?.cost).toBe(150000.5);
     await waitFor(() => expect((cost as HTMLInputElement).value, 'стоимость осталась в форме').toBe(''));
 
-    posted = null;
+    posted = null as Record<string, unknown> | null;
     fireEvent.click(screen.getByRole('button', { name: 'Завести машину' }));
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted?.cost).toBeNull();
