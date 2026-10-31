@@ -221,7 +221,8 @@ class IntakeReferenceServiceTest extends PostgresTestBase {
         inTenant(() -> {
             var saved = intake.registerDonor(donor("JT8"), null, null);
             intake.startDismantling(saved.getId());
-            jdbc.update("UPDATE donor SET legacy_code = '229', note = 'Синий маркер!!!' "
+            // Перенос с Bazon кладёт их номер и в number (задача 0364).
+            jdbc.update("UPDATE donor SET legacy_code = '229', number = 229, note = 'Синий маркер!!!' "
                     + "WHERE id = ?", saved.getId());
             return null;
         });

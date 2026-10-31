@@ -53,6 +53,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String CONDITION_COL = "t_000940";
     private static final String YEAR_TEXT = "t_000917";
     private static final String YEAR_REFILL = "t_000918";
+    private static final String DONOR_NUMBER = "t_000365";
 
     @Autowired
     private DataSource dataSource;
@@ -67,7 +68,7 @@ class BazonImporterTest extends PostgresTestBase {
     static void migrate() {
         provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
                 PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW, NO_PUBLISH, CONDITION_COL,
-                YEAR_TEXT, YEAR_REFILL);
+                YEAR_TEXT, YEAR_REFILL, DONOR_NUMBER);
     }
 
     @Test
@@ -145,6 +146,34 @@ class BazonImporterTest extends PostgresTestBase {
 
         assertThat(vehicle.get("brand")).isEqualTo("Toyota");
         assertThat(vehicle.get("model")).isEqualTo("Camry");
+    }
+
+    @Test
+    @DisplayName("Номер донора Bazon становится номером машины; занятый и нечисловой — следующий за наибольшим")
+    void donorNumberIsCarriedOver() throws Exception {
+        // Машина, заведённая до переноса, уже держит номер 5.
+        jdbc.update("INSERT INTO %s.donor (status, number) VALUES ('DISMANTLED', 5)".formatted(DONOR_NUMBER));
+        Path donors = write("donors.csv", """
+                "Номер донора";"Марка";"Модель";"Год выпуска";"VIN";"Поставка";"Статус";\
+                "Цвет";"Пробег";"Руль";"Привод";"Тип КПП";"Модель КПП";"Комплектация"
+                "Д-9";"Toyota";"Camry";"2006";"";"";"Разбор";"";"";"";"";"";"";""
+                "007";"Toyota";"Camry";"2006";"";"";"Разбор";"";"";"";"";"";"";""
+                "5";"Toyota";"Camry";"2006";"";"";"Разбор";"";"";"";"";"";"";""
+                "40";"Toyota";"Camry";"2006";"";"";"Разбор";"";"";"";"";"";"";""
+                """);
+
+        ImportReport report = new BazonImporter(dataSource, DONOR_NUMBER)
+                .importAll(donors, write("catalog.csv", CATALOG_HEADER));
+
+        assertThat(donorNumberOf(DONOR_NUMBER, "007")).isEqualTo(7L);
+        assertThat(donorNumberOf(DONOR_NUMBER, "40")).isEqualTo(40L);
+        // «Д-9» идёт первой строкой: без учёта наибольшего в файле она взяла бы
+        // номер, который ниже принесёт другая машина.
+        assertThat(donorNumberOf(DONOR_NUMBER, "Д-9")).isGreaterThan(40L);
+        Long taken = donorNumberOf(DONOR_NUMBER, "5");
+        assertThat(taken).isGreaterThan(40L).isNotEqualTo(donorNumberOf(DONOR_NUMBER, "Д-9"));
+        assertThat(report.problems()).extracting(ImportReport.Problem::message)
+                .contains("номер донора 5 уже у другой машины — перенесённая получила номер " + taken);
     }
 
     @Test
@@ -703,6 +732,12 @@ class BazonImporterTest extends PostgresTestBase {
         return jdbc.queryForObject(
                 "SELECT " + column + " FROM " + schema + ".part WHERE legacy_code = ?",
                 String.class, legacyCode);
+    }
+
+    private Long donorNumberOf(String schema, String legacyCode) {
+        return jdbc.queryForObject(
+                "SELECT number FROM " + schema + ".donor WHERE legacy_code = ?",
+                Long.class, legacyCode);
     }
 
     private String bodyOf(String schema, String legacyCode) {

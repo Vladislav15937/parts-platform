@@ -102,8 +102,8 @@ class PartDonorLockTest extends PostgresTestBase {
             Long camryGen = jdbc.queryForObject("SELECT min(id) FROM catalog.generation"
                     + " WHERE model_id = ? AND year_from IS NOT NULL", Long.class, camry);
             donorA = jdbc.queryForObject("""
-                    INSERT INTO donor (brand_id, model_id, generation_id, status, legacy_code)
-                    VALUES (?, ?, ?, 'DISMANTLING', '261') RETURNING id""",
+                    INSERT INTO donor (brand_id, model_id, generation_id, status, legacy_code, number)
+                    VALUES (?, ?, ?, 'DISMANTLING', '261', 261) RETURNING id""",
                     Long.class, toyota, camry, camryGen);
             Map<String, Object> other = jdbc.queryForMap("""
                     SELECT g.id AS generation_id, m.id AS model_id, b.id AS brand_id,
@@ -117,8 +117,8 @@ class PartDonorLockTest extends PostgresTestBase {
             brandB = (String) other.get("brand");
             modelB = (String) other.get("model");
             donorB = jdbc.queryForObject("""
-                    INSERT INTO donor (brand_id, model_id, generation_id, status, legacy_code)
-                    VALUES (?, ?, ?, 'DISMANTLING', '262') RETURNING id""", Long.class,
+                    INSERT INTO donor (brand_id, model_id, generation_id, status, legacy_code, number)
+                    VALUES (?, ?, ?, 'DISMANTLING', '262', 262) RETURNING id""", Long.class,
                     other.get("brand_id"), other.get("model_id"), other.get("generation_id"));
             markId = jdbc.queryForObject("SELECT min(id) FROM catalog.bazon_mark", Long.class);
             return null;

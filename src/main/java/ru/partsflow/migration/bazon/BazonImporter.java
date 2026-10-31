@@ -362,12 +362,32 @@ public final class BazonImporter {
                 .map(f -> "COALESCE(%s, ?)".formatted(f.name()))
                 .collect(java.util.stream.Collectors.joining(", "));
 
+        long fileMax = maxDonorNumber(donorsCsv);
         try (Connection c = dataSource.getConnection()) {
             c.setAutoCommit(false);
+            // Номер донора (задача 0364): тем же замком, что у заведения машины
+            // с экрана (DonorNumbers), — иначе «наибольший плюс один» прочитали
+            // бы оба разом. Держится до коммита переноса машин.
+            try (PreparedStatement lock = c.prepareStatement(
+                    "SELECT pg_advisory_xact_lock(hashtext(?))")) {
+                lock.setString(1, schema + ".donor_number");
+                lock.executeQuery().close();
+            }
+            // Свой номер Bazon, если он число и свободен; иначе — следующий
+            // за наибольшим и в базе, и в файле: машина без годного номера,
+            // заведённая раньше, иначе заняла бы номер, который строкой ниже
+            // принесёт другая (тот же довод, что у «Номера товара», 0334).
             try (PreparedStatement insert = c.prepareStatement("""
-                    INSERT INTO %s.donor (%s, legacy_code, status)
-                    VALUES (%s, ?, 'DISMANTLED') RETURNING id"""
-                    .formatted(schema, columns, holders));
+                    INSERT INTO %s.donor (%s, legacy_code, status, number)
+                    VALUES (%s, ?, 'DISMANTLED',
+                            coalesce((SELECT w FROM (SELECT ?::bigint AS w) wanted
+                                       WHERE w IS NOT NULL
+                                         AND NOT EXISTS (SELECT 1 FROM %s.donor WHERE number = w)),
+                                     greatest(nextval('%s.donor_number_seq'),
+                                              coalesce((SELECT max(number) FROM %s.donor), 0) + 1,
+                                              ?::bigint + 1)))
+                    RETURNING id, number"""
+                    .formatted(schema, columns, holders, schema, schema, schema));
                  // Обновление только при настоящем расхождении: без этого
                  // повтор отчитывался бы «дополнено» по каждой машине,
                  // ничего не изменив, и число перестало бы что-либо значить.
@@ -406,9 +426,24 @@ public final class BazonImporter {
                         for (int i = 0; i < DONOR_FIELDS.size(); i++) {
                             bind(insert, at++, DONOR_FIELDS.get(i), values[i]);
                         }
-                        insert.setString(at, number.number());
+                        insert.setString(at++, number.number());
+                        Long wanted = donorNumberOf(number.number());
+                        if (wanted == null) {
+                            insert.setNull(at++, java.sql.Types.BIGINT);
+                        } else {
+                            insert.setLong(at++, wanted);
+                        }
+                        insert.setLong(at, fileMax);
 
-                        ids.put(number.number(), firstLong(insert));
+                        try (ResultSet created = insert.executeQuery()) {
+                            created.next();
+                            ids.put(number.number(), created.getLong("id"));
+                            long given = created.getLong("number");
+                            if (wanted != null && wanted != given) {
+                                report.problem(row.lineNumber(), "номер донора " + wanted
+                                        + " уже у другой машины — перенесённая получила номер " + given);
+                            }
+                        }
                         report.count("доноров");
                     } catch (SQLException e) {
                         report.problem(row.lineNumber(), "донор не загружен: " + e.getMessage());
@@ -1153,6 +1188,29 @@ public final class BazonImporter {
         // читается из текста: Postgres называет его в сообщении всегда.
         return "23505".equals(e.getSQLState())
                 && e.getMessage() != null && e.getMessage().contains("\"" + constraint + "\"");
+    }
+
+    /**
+     * Номер донора из номера Bazon — тем же правилом, что разобрала миграция
+     * tenant/108: целое больше нуля без знаков вокруг («077» — 77).
+     * Не число («12-А») — {@code null}, машина получит следующий номер.
+     */
+    static Long donorNumberOf(String legacy) {
+        String value = legacy == null ? "" : legacy.strip();
+        return value.matches("0*[1-9][0-9]{0,17}") ? Long.parseLong(value) : null;
+    }
+
+    /** Наибольший годный номер донора в файле машин; 0 — ни одного. */
+    private long maxDonorNumber(Path donorsCsv) {
+        long[] max = {0};
+        forEachRow(donorsCsv, new ImportReport(), row -> {
+            var number = BazonValueParser.parseDonorNumber(row.get("Номер донора"));
+            Long n = number == null || !number.isParsed() ? null : donorNumberOf(number.number());
+            if (n != null && n > max[0]) {
+                max[0] = n;
+            }
+        });
+        return max[0];
     }
 
     /** Наибольший годный «Номер товара» файла; {@code null} — ни одного. */

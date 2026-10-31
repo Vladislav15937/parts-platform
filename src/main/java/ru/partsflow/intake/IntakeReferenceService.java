@@ -135,7 +135,7 @@ public class IntakeReferenceService {
      */
     private List<DonorRef> donors() {
         return jdbc.query("""
-                SELECT d.id, d.public_code, d.legacy_code, d.note,
+                SELECT d.id, d.number, d.note,
                        d.vin, d.year, d.status, d.location,
                        b.name AS brand, m.name AS model
                   FROM donor d
@@ -145,10 +145,9 @@ public class IntakeReferenceService {
                  ORDER BY d.id DESC""",
                 (rs, i) -> new DonorRef(
                         rs.getLong("id"),
-                        // Клиент зовёт машину своим номером, а не нашим:
-                        // то же, что в карточке машины и в отчёте окупаемости.
-                        rs.getString("legacy_code") == null
-                                ? rs.getString("public_code") : rs.getString("legacy_code"),
+                        // Номер донора — то же, что в списке машин и в карточке
+                        // (задача 0364): внутренний public_code наружу не уходит.
+                        rs.getString("number"),
                         rs.getString("note"),
                         rs.getString("brand"),
                         rs.getString("model"),

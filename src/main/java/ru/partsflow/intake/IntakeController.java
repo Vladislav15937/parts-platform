@@ -170,6 +170,11 @@ public class IntakeController {
         donor.setTransmissionModel(request.transmissionModel());
         donor.setEquipmentCode(request.equipmentCode());
         donor.setNote(request.note());
+        donor.setNumber(request.number());
+        donor.setRestyling(request.restyling());
+        donor.setClientDescription(request.clientDescription());
+        donor.setVideoUrl(request.videoUrl());
+        donor.setStatusId(request.statusId());
 
         Donor saved = intake.registerDonor(donor, request.supplyId(), CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(DonorView.of(saved));
@@ -345,7 +350,14 @@ public class IntakeController {
                                   поле молча отбрасывалось, и позиции наследовали пустоту. */
                                String equipmentCode,
                                String note,
-                               Long supplyId) {
+                               Long supplyId,
+                               /* Задача 0364: пусто — сервер выдаёт следующий
+                                  за наибольшим; вписанный — если свободен. */
+                               Long number,
+                               String restyling,
+                               String clientDescription,
+                               String videoUrl,
+                               Long statusId) {
     }
 
     public record ReceiptRequest(
@@ -424,11 +436,16 @@ public class IntakeController {
         }
     }
 
-    public record DonorView(Long id, String publicCode, Donor.DonorStatus status,
+    /**
+     * @param number номер донора — им машину зовут на экранах; внутренний
+     *               {@code public_code} наружу не отдаётся (задача 0364, п. 6):
+     *               «Машина заведена: 7584A8FEAE3D» владелец прочитать не мог
+     */
+    public record DonorView(Long id, Long number, Donor.DonorStatus status,
                             String location, Long supplyId) {
 
         static DonorView of(Donor donor) {
-            return new DonorView(donor.getId(), donor.getPublicCode(), donor.getStatus(),
+            return new DonorView(donor.getId(), donor.getNumber(), donor.getStatus(),
                     donor.getLocation(), donor.getSupplyId());
         }
     }
