@@ -102,6 +102,36 @@ describe('форма машины: номер донора и общая инф�
     await waitFor(() => expect(screen.getByText('Машина заведена: №700')).toBeTruthy());
   });
 
+  it('«Стоимость» уезжает числом у того, кто ведёт затраты; пустая — null; отрицательная не уезжает', async () => {
+    // Ответ владельца 31.10.2026: «Стоимость — журналом затрат».
+    render(<DonorScreen online reference={reference()} onChanged={() => {}} canRecordCost />);
+    await pickToyota();
+    const cost = screen.getByLabelText('Стоимость');
+    fireEvent.change(cost, { target: { value: '-5' } });
+    expect(screen.getByText('Стоимость — число не меньше нуля')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Завести машину' }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(cost, { target: { value: '150000,5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Завести машину' }));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted?.cost).toBe(150000.5);
+    await waitFor(() => expect((cost as HTMLInputElement).value, 'стоимость осталась в форме').toBe(''));
+
+    posted = null;
+    fireEvent.click(screen.getByRole('button', { name: 'Завести машину' }));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted?.cost).toBeNull();
+  });
+
+  it('без права вести затраты «Стоимости» нет, и она не уезжает', async () => {
+    render(<DonorScreen online reference={reference()} onChanged={() => {}} />);
+    await pickToyota();
+    expect(screen.queryByLabelText('Стоимость')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Завести машину' }));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted?.cost).toBeNull();
+  });
+
   it('номер не числом — сказано, и завести нельзя', async () => {
     render(<DonorScreen online reference={reference()} onChanged={() => {}} />);
     const field = await screen.findByLabelText('Номер донора');

@@ -313,7 +313,10 @@ public final class BazonImporter {
             new Column("color_code", Types.VARCHAR),
             new Column("mileage_km", Types.INTEGER),
             new Column("supply_id", Types.BIGINT),
-            new Column("location", Types.VARCHAR),
+            // «Статус» Bazon — пункт списка статусов машины клиента, а не
+            // «Где стоит» (ответ владельца 31.10.2026, задача 0364): до этого
+            // он ложился в location.
+            new Column("status_id", Types.BIGINT),
             new Column("steering", Types.VARCHAR),
             new Column("drive_type", Types.VARCHAR),
             new Column("transmission_type", Types.VARCHAR),
@@ -344,9 +347,11 @@ public final class BazonImporter {
      * миграция чинит одного клиента и один раз, а здесь любой, повторив
      * свою выгрузку, получает то же самое.
      *
-     * <p>Статус машины не трогается вовсе: он ведётся у нас — купленная
-     * встаёт в разбор, разобранная списывается, — и выгрузка про это
-     * не знает.
+     * <p>Состояние приёмки ({@code donor.status}) не трогается вовсе: оно
+     * ведётся у нас — купленная встаёт в разбор, разобранная списывается, —
+     * и выгрузка про это не знает. Статус из списка клиента
+     * ({@code status_id}) — другое: его слово несёт выгрузка, и он
+     * дозаполняется, как остальные поля.
      */
     private Map<String, Long> importDonors(Path donorsCsv, Map<String, Long> supplies,
                                            ImportReport report) throws SQLException {
@@ -492,7 +497,7 @@ public final class BazonImporter {
                 color == null ? null : color.code(),
                 BazonValueParser.parseInteger(row.get("Пробег")),
                 supplies.get(row.get("Поставка")),
-                row.get("Статус"),
+                donorStatusId(c, row.get("Статус")),
                 BazonValueParser.parseSteering(row.get("Руль")),
                 BazonValueParser.parseDriveType(row.get("Привод")),
                 BazonValueParser.parseTransmissionType(row.get("Тип КПП")),
@@ -503,6 +508,29 @@ public final class BazonImporter {
                 row.get("Кузов"),
                 row.get("Двигатель"),
                 buildDonorNote(row)};
+    }
+
+    /**
+     * Пункт списка статусов машины для слова из выгрузки; нет такого — заводится
+     * последним. Слово сравнивается так же, как его сторожит уникальный индекс
+     * ({@code lower(btrim(name))}), и вставка — {@code ON CONFLICT}, а не
+     * проверка чтением: владелец может заводить статус в настройках рядом
+     * с переносом. Пусто — статус не задан, как у Bazon.
+     */
+    private Long donorStatusId(Connection c, String raw) throws SQLException {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String name = raw.strip();
+        try (PreparedStatement insert = c.prepareStatement("""
+                INSERT INTO %1$s.donor_status (name, sort_order)
+                VALUES (?, coalesce((SELECT max(sort_order) FROM %1$s.donor_status), 0) + 1)
+                ON CONFLICT ((lower(btrim(name)))) DO NOTHING""".formatted(schema))) {
+            insert.setString(1, name);
+            insert.executeUpdate();
+        }
+        return selectId(c, "SELECT id FROM " + schema
+                + ".donor_status WHERE lower(btrim(name)) = lower(btrim(?))", name);
     }
 
     private static void bind(PreparedStatement ps, int index, Column column, Object value)

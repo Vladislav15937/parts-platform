@@ -68,10 +68,16 @@ interface Props {
   canExpect?: boolean;
   /** «N запчастей — Посмотреть»: открыть склад с отбором по машине (задача 0364). */
   onDonorParts?: (donorCode: string) => void;
+  /**
+   * Право «Записывать затраты по машине»: «Стоимость» ложится закупкой
+   * в журнал затрат (ответ владельца 31.10.2026), и без права сервер её
+   * отобьёт — поле такому сотруднику не показывается вовсе.
+   */
+  canRecordCost?: boolean;
 }
 
 export function DonorScreen({
-  reference, online, onChanged, canExpect = false, onDonorParts,
+  reference, online, onChanged, canExpect = false, onDonorParts, canRecordCost = false,
 }: Props) {
   // Затраты вносятся по уже заведённой машине: до её появления вкладывать
   // не во что, а после — покупка, эвакуатор и разбор идут отдельными
@@ -109,6 +115,9 @@ export function DonorScreen({
   const [supplyId, setSupplyId] = useState<number | null>(null);
   const [spec, setSpec] = useState<DonorSpec>(EMPTY_SPEC);
   const [extra, setExtra] = useState<DonorExtra>(EMPTY_EXTRA);
+  // «Стоимость» только при заведении: дальше покупка — запись журнала затрат,
+  // и правят её там, а не в форме машины.
+  const [cost, setCost] = useState('');
   // Предложенный номер донора: наибольший плюс один (задача 0364). Не
   // приехал — поле пустое, и номер выдаст сервер при заведении.
   const [suggested, setSuggested] = useState<number | null>(null);
@@ -199,6 +208,25 @@ export function DonorScreen({
 
       <DonorInfoFields extra={extra} onChange={setExtra} vocabulary={vocabulary}
                        suggested={suggested} />
+
+      {canRecordCost && (
+        <>
+          <label>
+            Стоимость
+            <input
+              inputMode="decimal"
+              value={cost}
+              placeholder="необязательно"
+              onChange={(e) => setCost(e.target.value.replace(',', '.'))}
+            />
+          </label>
+          {costBad(cost) ? (
+            <p className="note note--error">Стоимость — число не меньше нуля</p>
+          ) : (
+            <p className="note">Запишется в затраты машины покупкой</p>
+          )}
+        </>
+      )}
 
       <label>
         Марка
@@ -413,7 +441,7 @@ export function DonorScreen({
       <button
         type="button"
         disabled={!online || sending || brand === null || vinBad || mileageBad(spec.mileage)
-                  || extraBad(extra)}
+                  || extraBad(extra) || (canRecordCost && costBad(cost))}
         onClick={() => void submit()}
       >
         {sending ? 'Заводим…' : 'Завести машину'}
@@ -789,6 +817,7 @@ export function DonorScreen({
           supplyId,
           ...extraToFields(extra),
           number,
+          cost: canRecordCost && cost.trim() !== '' ? Number(cost) : null,
         },
       });
 
@@ -805,6 +834,7 @@ export function DonorScreen({
       setVin('');
       setSpec(EMPTY_SPEC);
       setExtra(EMPTY_EXTRA);
+      setCost('');
       void suggestNumber();
     } catch (cause) {
       if (mounted.current) setMessage(describe(cause, 'Машина не заведена'));
@@ -812,6 +842,13 @@ export function DonorScreen({
       if (mounted.current) setSending(false);
     }
   }
+}
+
+/** Пусто — затраты не заводятся; иначе число не меньше нуля, как у журнала затрат. */
+function costBad(value: string): boolean {
+  if (value.trim() === '') return false;
+  const parsed = Number(value);
+  return !Number.isFinite(parsed) || parsed < 0;
 }
 
 function describe(cause: unknown, fallback: string): string {

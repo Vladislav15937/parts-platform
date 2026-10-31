@@ -59,6 +59,10 @@ export function DonorStatusesPanel() {
       ) : statuses.length === 0 ? (
         <p className="note">Статусы не заведены. Пока их нет, статус у машины не выбрать.</p>
       ) : (
+        // Своя прокрутка: панель настроек узкая (280 на мониторе), а две
+        // кнопки в строке шире её — без обёртки таблица вылезала за полотно
+        // карточки, замерено живым прогоном.
+        <div className="table-scroll">
         <table>
           <thead>
             <tr>
@@ -113,6 +117,7 @@ export function DonorStatusesPanel() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       <div className="row">

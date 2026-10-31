@@ -54,6 +54,7 @@ class BazonImporterTest extends PostgresTestBase {
     private static final String YEAR_TEXT = "t_000917";
     private static final String YEAR_REFILL = "t_000918";
     private static final String DONOR_NUMBER = "t_000365";
+    private static final String DONOR_STATUS = "t_000391";
 
     @Autowired
     private DataSource dataSource;
@@ -68,7 +69,7 @@ class BazonImporterTest extends PostgresTestBase {
     static void migrate() {
         provisionTenants(IMPORT, REPEAT, HEADER, NAMES, BAD_ROW, UNKNOWN, BACKFILL,
                 PARTS_BACKFILL, JUNK_OEM, BROKEN_ROW, NO_PUBLISH, CONDITION_COL,
-                YEAR_TEXT, YEAR_REFILL, DONOR_NUMBER);
+                YEAR_TEXT, YEAR_REFILL, DONOR_NUMBER, DONOR_STATUS);
     }
 
     @Test
@@ -174,6 +175,43 @@ class BazonImporterTest extends PostgresTestBase {
         assertThat(taken).isGreaterThan(40L).isNotEqualTo(donorNumberOf(DONOR_NUMBER, "Д-9"));
         assertThat(report.problems()).extracting(ImportReport.Problem::message)
                 .contains("номер донора 5 уже у другой машины — перенесённая получила номер " + taken);
+    }
+
+    @Test
+    @DisplayName("Статус машины Bazon ложится в список статусов клиента и выбран у машины")
+    void donorStatusGoesToTheClientsList() throws Exception {
+        // Ответ владельца 31.10.2026 (задача 0364): «статусы переносить» —
+        // в список статусов машины, а не в «Где стоит».
+        Path donors = write("donors.csv", """
+                "Номер донора";"Марка";"Модель";"Год выпуска";"VIN";"Поставка";"Статус";\
+                "Цвет";"Пробег";"Руль";"Привод";"Тип КПП";"Модель КПП";"Комплектация"
+                "11";"Toyota";"Camry";"2006";"";"";"В Японии";"";"";"";"";"";"";""
+                "12";"Toyota";"Camry";"2006";"";"";" в японии ";"";"";"";"";"";"";""
+                "13";"Toyota";"Camry";"2006";"";"";"Разобрана";"";"";"";"";"";"";""
+                "14";"Toyota";"Camry";"2006";"";"";"";"";"";"";"";"";"";""
+                """);
+
+        ImportReport report = new BazonImporter(dataSource, DONOR_STATUS)
+                .importAll(donors, write("catalog.csv", CATALOG_HEADER));
+
+        assertThat(report.problems()).as("перенос машин отказал").isEmpty();
+        assertThat(donorStatusOf(DONOR_STATUS, "11")).isEqualTo("В Японии");
+        assertThat(donorStatusOf(DONOR_STATUS, "12"))
+                .as("то же слово другим регистром — тот же пункт списка, а не второй")
+                .isEqualTo("В Японии");
+        assertThat(donorStatusOf(DONOR_STATUS, "13"))
+                .as("значение, которое в списке уже есть, не заводится вторым")
+                .isEqualTo("Разобрана");
+        assertThat(donorStatusOf(DONOR_STATUS, "14")).isNull();
+        assertThat(jdbc.queryForList(
+                "SELECT name FROM %s.donor_status ORDER BY sort_order, id".formatted(DONOR_STATUS),
+                String.class))
+                .containsExactly("Куплена", "В разборе", "Разобрана", "Списана", "В Японии");
+        assertThat(jdbc.queryForList(
+                "SELECT location FROM %s.donor WHERE location IS NOT NULL".formatted(DONOR_STATUS),
+                String.class))
+                .as("статус Bazon больше не пишется в «Где стоит»")
+                .isEmpty();
     }
 
     @Test
@@ -732,6 +770,12 @@ class BazonImporterTest extends PostgresTestBase {
         return jdbc.queryForObject(
                 "SELECT " + column + " FROM " + schema + ".part WHERE legacy_code = ?",
                 String.class, legacyCode);
+    }
+
+    private String donorStatusOf(String schema, String legacyCode) {
+        return jdbc.queryForObject("""
+                SELECT s.name FROM %1$s.donor d LEFT JOIN %1$s.donor_status s ON s.id = d.status_id
+                 WHERE d.legacy_code = ?""".formatted(schema), String.class, legacyCode);
     }
 
     private Long donorNumberOf(String schema, String legacyCode) {

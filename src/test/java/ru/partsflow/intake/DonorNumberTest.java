@@ -145,6 +145,43 @@ class DonorNumberTest extends PostgresTestBase {
     }
 
     @Test
+    @DisplayName("«Стоимость» из формы — закупка в журнале затрат машины, и только у того, кто ведёт затраты")
+    void costIsAPurchaseInTheCostJournal() throws Exception {
+        // Ответ владельца 31.10.2026: «Стоимость — журналом затрат».
+        long donor = createDonor("{\"brandId\":%d,\"cost\":150000}").path("id").asLong();
+        JsonNode costs = json(mvc.perform(get("/api/intake/donors/" + donor + "/costs").session(owner))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(costs).as("стоимость из формы не легла в журнал затрат").hasSize(1);
+        assertThat(costs.get(0).path("type").asText()).isEqualTo("PURCHASE");
+        assertThat(costs.get(0).path("amount").decimalValue()).isEqualByComparingTo("150000");
+        assertThat(json(mvc.perform(get("/api/organization/audit").param("kind", "Затрата по машине")
+                        .session(owner)).andExpect(status().isOk()).andReturn()).path("items"))
+                .as("закупка из формы не видна в журнале действий").isNotEmpty();
+
+        long empty = createDonor("{\"brandId\":%d}").path("id").asLong();
+        assertThat(json(mvc.perform(get("/api/intake/donors/" + empty + "/costs").session(owner))
+                .andReturn())).as("пустая «Стоимость» завела затрату").isEmpty();
+
+        long before = donorCount();
+        MvcResult negative = send(post("/api/intake/donors"),
+                "{\"brandId\":%d,\"cost\":-1}".formatted(brand), status().isBadRequest());
+        assertThat(text(negative)).contains("не может быть отрицательной");
+        assertThat(donorCount()).as("машина осталась без отказанной стоимости").isEqualTo(before);
+
+        MockHttpSession storekeeper = login("nomer-kladovshchik", "STOREKEEPER");
+        MvcResult refused = mvc.perform(post("/api/intake/donors").with(csrf()).session(storekeeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"brandId\":%d,\"cost\":1000}".formatted(brand)))
+                .andExpect(status().isForbidden()).andReturn();
+        assertThat(text(refused)).contains("Стоимость");
+        assertThat(donorCount()).isEqualTo(before);
+        mvc.perform(post("/api/intake/donors").with(csrf()).session(storekeeper)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"brandId\":%d}".formatted(brand)))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
     @DisplayName("Статус, рестайлинг, описание для клиента и ссылка на видео — заводятся, правятся и попадают в журнал")
     void formFieldsAreKeptAndJournalled() throws Exception {
         Map<String, Long> statuses = statusIds();
@@ -323,6 +360,30 @@ class DonorNumberTest extends PostgresTestBase {
 
     private static JsonNode json(MvcResult result) throws Exception {
         return new ObjectMapper().readTree(result.getResponse().getContentAsByteArray());
+    }
+
+    private long donorCount() {
+        return inTenant(() -> jdbc.queryForObject("SELECT count(*) FROM donor", Long.class));
+    }
+
+    private MockHttpSession login(String login, String role) throws Exception {
+        inTenant(() -> {
+            jdbc.update("""
+                    INSERT INTO tenant_member (login, display_name, password_hash, role)
+                    SELECT ?, 'Кладовщик номеров', ?, ?
+                     WHERE NOT EXISTS (SELECT 1 FROM tenant_member WHERE login = ?)""",
+                    login, passwordEncoder.encode("пароль-подлиннее"), role, login);
+            jdbc.update("UPDATE tenant_member SET role = ? WHERE login = ?", role, login);
+            return null;
+        });
+        var result = mvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"company":"donornumber","login":"%s","password":"пароль-подлиннее"}"""
+                                .formatted(login)))
+                .andExpect(status().isOk())
+                .andReturn();
+        return (MockHttpSession) result.getRequest().getSession(false);
     }
 
     private MockHttpSession login() throws Exception {

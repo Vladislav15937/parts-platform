@@ -64,6 +64,7 @@ public class IntakeService {
 
     private final DonorNumbers donorNumbers;
     private final DonorStatusService donorStatuses;
+    private final DonorCostService donorCosts;
 
     public IntakeService(SupplyRepository supplies,
                          DonorRepository donors,
@@ -82,7 +83,9 @@ public class IntakeService {
                          ru.partsflow.inventory.PartIdentity identity,
                          ru.partsflow.inventory.StockDocumentHistory history,
                          DonorNumbers donorNumbers,
-                         DonorStatusService donorStatuses) {
+                         DonorStatusService donorStatuses,
+                         DonorCostService donorCosts) {
+        this.donorCosts = donorCosts;
         this.history = history;
         this.donorNumbers = donorNumbers;
         this.donorStatuses = donorStatuses;
@@ -155,6 +158,22 @@ public class IntakeService {
      */
     @Transactional
     public Donor registerDonor(Donor donor, Long supplyId, Long authorId) {
+        return registerDonor(donor, supplyId, null, authorId);
+    }
+
+    /**
+     * То же, со «Стоимостью» из формы «Создание донора»: она пишется закупкой
+     * («Покупка») в журнал затрат машины и входит в окупаемость — ответ владельца
+     * 31.10.2026 (задача 0364), отдельной колонки у машины нет. Одной транзакцией
+     * с машиной: отказ затраты (отрицательная сумма) не оставляет машины без неё.
+     * Пусто — затрата не заводится.
+     *
+     * <p>{@code @Transactional} у перегрузки свой: аннотация не наследуется,
+     * а блокировка номера донора требует внешней транзакции.
+     */
+    @Transactional
+    public Donor registerDonor(Donor donor, Long supplyId, java.math.BigDecimal cost,
+                               Long authorId) {
         if (donor.getStatusId() != null) {
             donorStatuses.require(donor.getStatusId());
         }
@@ -170,7 +189,11 @@ public class IntakeService {
         }
         donor.setCreatedBy(authorId);
         donor.setNumber(donorNumbers.assign(donor.getNumber(), null));
-        return donors.saveAndFlush(donor);
+        Donor saved = donors.saveAndFlush(donor);
+        if (cost != null) {
+            donorCosts.add(saved.getId(), "PURCHASE", cost, null, null, authorId);
+        }
+        return saved;
     }
 
     /** Меняет локацию машины в логистической цепочке. Стадия разбора не двигается. */
