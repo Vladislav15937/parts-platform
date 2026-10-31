@@ -52,6 +52,15 @@ public class CatalogService {
     static final String OEM_NORMALIZED_BRANCH =
             "\n                          UNION SELECT part_id FROM part_oem WHERE " + OEM_NORMALIZED;
 
+    /**
+     * Ветка {@code UNION} по адресу полки (задача 0368). Точное равенство,
+     * без индекса: ветка появляется только на запросе-адресе, а это одно
+     * сравнение строки на позицию; понадобится чаще — индекс заводит
+     * {@code migrator}.
+     */
+    static final String ADDRESS_BRANCH =
+            "\n                          UNION SELECT id FROM part WHERE section = ?";
+
     /** Подстрока по приведённому виду: «123» находит и «AB1234», как и по набранному. */
     static String oemNormalizedArg(String key) {
         return "%" + key + "%";
@@ -856,6 +865,11 @@ public class CatalogService {
             // приводится тем же OemNumbers.normalize, что и запись, и ищется
             // в part_oem.normalized подстрокой. Не похож на номер — ветки нет.
             String oemKey = ru.partsflow.catalog.OemNumbers.searchKey(query);
+            // Адрес полки «01-01-03-01-02» (задача 0368): весь запрос — адрес
+            // по схеме, и тогда он ищется в «Секции» точно, в том же приведении,
+            // в каком его пишет привязка («01-01-3-1-2» — та же полка). Ветка
+            // появляется только на таком запросе: на «фаре» её нет вовсе.
+            String address = StorageAddress.parse(query).map(StorageAddress::text).orElse(null);
             // Публичный код при запросе-номере сравнивается точно (задача 0263):
             // двенадцать случайных знаков содержат «347» у каждой четырёхсотой
             // записи, и подстрока приносила бы чужие позиции рядом с названной.
@@ -874,6 +888,7 @@ public class CatalogService {
                     + (oemKey == null ? "" : OEM_NORMALIZED_BRANCH)
                     + (number == null ? ""
                             : PartNumberQuery.UNION_BRANCH + PartNumberQuery.DROM_AD_BRANCH)
+                    + (address == null ? "" : ADDRESS_BRANCH)
                     + ")");
             String like = "%" + query.strip() + "%";
             String codeArg = PartNumberQuery.publicCodeArg(query, number != null);
@@ -888,6 +903,9 @@ public class CatalogService {
                 args.add(number);
                 // Номер объявления Дрома (задача 0274): те же цифры, но текстом.
                 args.add(codeArg);
+            }
+            if (address != null) {
+                args.add(address);
             }
         }
         if (!withMissing) {

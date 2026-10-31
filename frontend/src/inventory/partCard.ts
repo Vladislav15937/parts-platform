@@ -1,3 +1,4 @@
+import { bySchema } from './storageAddress';
 import { PART_NUMBER_TITLE, partNumber } from './partNumber';
 import { CONDITION, SIDE_FR, SIDE_LR, qualityTitle, type Applicability, type CatalogRow } from './catalog';
 
@@ -53,7 +54,10 @@ export function cardFields(row: CatalogRow): Array<[string, string]> {
   add('Передний / Задний', row.sideFr === null ? null : SIDE_FR[row.sideFr] ?? row.sideFr);
   add('Левый / Правый', row.sideLr === null ? null : SIDE_LR[row.sideLr] ?? row.sideLr);
   add('Цвет', row.color);
-  add('Секция', row.section);
+  // Адрес полки (задача 0368); прежний со свободным названием — как есть,
+  // с пометкой: переименовывать его молча нельзя.
+  add('Секция', row.section === null || row.section.trim() === '' || bySchema(row.section)
+    ? row.section : `${row.section} · не по схеме`);
   add('Производитель', row.manufacturer);
   // «Оригинал» с карточки клиента на Дроме — его слово, дословно (задача 0277).
   add('Оригинальность', row.authenticity ?? null);

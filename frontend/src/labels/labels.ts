@@ -49,6 +49,25 @@ export function cellLabel(cell: Cell, warehouseName: string): CellLabel {
   };
 }
 
+/**
+ * Этикетка полки с адресом из пяти частей (задача 0368).
+ *
+ * <p>Та же вёрстка, что у этикетки ячейки: адрес крупно, под ним склад
+ * и части адреса словами, штрихкод адреса и адрес цифрами под ним — его
+ * набирают руками, когда затёртый штрихкод сканер не берёт. Что печатает
+ * на этикетке полки ориентир, снаружи не видно (задача 0368, «Не видел»):
+ * вёрстка — умолчание исполнителя, названо в PR.
+ */
+export function shelfLabel(address: string, warehouseName: string): CellLabel {
+  const [, zone, row, section, shelf] = address.split('-').map(Number);
+  return {
+    kind: 'cell',
+    code: address,
+    title: address,
+    note: `${warehouseName} · зона ${zone} · ряд ${row} · секция ${section} · полка ${shelf}`,
+  };
+}
+
 export interface PartLabel {
   kind: 'part';
   /** Что кодируется в штрихкод: Номер товара цифрами, без пробелов разрядов. */

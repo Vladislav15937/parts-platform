@@ -124,6 +124,9 @@
     <include file="tenant/105-feed-unsent-mark.sql" relativeToChangelogFile="true"/>
     <include file="tenant/106-part-own-body-codes.sql" relativeToChangelogFile="true"/>
     <include file="tenant/107-stock-document-event.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/108-donor-number.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/109-donor-form-fields.sql" relativeToChangelogFile="true"/>
+    <include file="tenant/110-donor-status-list.sql" relativeToChangelogFile="true"/>
 
     <!-- Вьюхи идут последними: они читают колонки, добавленные в 010. -->
     <include file="tenant/009-views.sql"                relativeToChangelogFile="true"/>

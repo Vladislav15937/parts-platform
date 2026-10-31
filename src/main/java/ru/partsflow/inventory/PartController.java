@@ -411,6 +411,25 @@ public class PartController {
     }
 
     /**
+     * Поставить позицию на полку адресом «склад-зона-ряд-секция-полка»
+     * (задача 0368) — вводом или сканом этикетки полки.
+     *
+     * <p>Право то же, что у перестановки по ячейке ({@code part.cell}):
+     * ставит на полку кладовщик, а форма правки карточки, где «Секция» тоже
+     * есть, ему закрыта — там себестоимость и минимальная цена.
+     */
+    @PutMapping("/{id}/section")
+    @PreAuthorize("hasAuthority('part.cell')")
+    public PartService.PartSection placeOnShelf(@PathVariable Long id,
+                                                @RequestBody SectionRequest request) {
+        return partService.placeOnShelf(id, request.section(), CurrentUser.memberId());
+    }
+
+    /** @param section адрес; пусто — снять */
+    public record SectionRequest(String section) {
+    }
+
+    /**
      * Тело правки карточки.
      *
      * <p>С задачи 0302 здесь всё, что есть в форме: стороны, номер
