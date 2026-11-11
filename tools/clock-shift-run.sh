@@ -474,7 +474,8 @@ else
             tail -25 "$SHIM/back.log" | sed 's/^/      /'
             warn "  Если это отказ выкачки — так и задумано: сеть под сдвинутыми"
             warn "  часами не работает. Прогрейте maven настоящими часами"
-            warn "  и повторите: ./mvnw -B -ntp -DskipTests=true test-compile"
+            warn "  реальным JUnit-тестом: ./mvnw -B -ntp test -Dtest=OemNumbersTest"
+            warn "  Затем повторите сдвинутый прогон. test-compile не загружает provider."
             UNCHECKED=1
         fi
     fi
