@@ -7,7 +7,8 @@
     ./tools/board.py --свободные  что можно раздавать прямо сейчас
     ./tools/board.py --selftest   прогнать сторожа по подделкам и выйти
 
-Читает `tasks/*.md`. Одна задача — один файл: пять агентов, правящих общий
+Читает `tasks/*.md`, кроме README.md и инструкций AGENTS.md/AGENTS.override.md.
+Одна задача — один файл: пять агентов, правящих общий
 список параллельно, дерутся на слиянии, а свой файл каждый трогает один.
 
 Отдельно проверяет то, из-за чего доска начинает врать. Проверок было пять,
@@ -339,7 +340,7 @@ def read(path):
 def задачи(tasks_dir):
     tasks, broken = [], []
     for name in sorted(os.listdir(tasks_dir)):
-        if not name.endswith(".md") or name == "README.md":
+        if not задачный(name):
             continue
         t = read(os.path.join(tasks_dir, name))
         if t is None:
@@ -1097,6 +1098,7 @@ def дерево_selftest():
         run("init", "-q")
         run("symbolic-ref", "HEAD", "refs/heads/main")
         open(os.path.join(tasks_dir, "README.md"), "w").write("правила\n")
+        open(os.path.join(tasks_dir, "AGENTS.md"), "w").write("инструкции Codex\n")
         for номер in ("0501", "0502", "0503"):
             задача(номер)
         commit("основа")
@@ -1119,6 +1121,8 @@ def дерево_selftest():
         run("checkout", "-q", "main")
         задача("0505")
         задача("0502", status="в работе", who="coder")
+        open(os.path.join(tasks_dir, "AGENTS.md"), "w").write("новые инструкции Codex\n")
+        open(os.path.join(tasks_dir, "AGENTS.override.md"), "w").write("локальные инструкции\n")
         commit("доска: 0505 заведена, 0502 в работе")
         run("update-ref", "refs/remotes/origin/main", "HEAD")
         run("checkout", "-q", "feature/0501")
@@ -1134,7 +1138,7 @@ def дерево_selftest():
                         f"(итог {итог}, причина «{причина}»)")
         if итог is not None and итог["в_main"] != 4:
             сбои.append(f"число задач в origin/main посчитано {итог['в_main']} "
-                        f"вместо 4 — README задачей не считается")
+                        f"вместо 4 — README и инструкции Codex задачами не считаются")
 
         # Местный main впереди origin/main (отметка не отправлена) — молчит.
         run("checkout", "-q", "main")
@@ -1247,9 +1251,9 @@ def слитое(repo=None):
 
 
 def задачный(путь):
-    """Файл задачи по пути внутри дерева: `tasks/0199-….md`, не README."""
+    """Одинаковое распознавание задач для каталога и сверки дерева git."""
     имя = os.path.basename(путь)
-    return имя.endswith(".md") and имя != "README.md"
+    return имя.endswith(".md") and имя not in ("README.md", "AGENTS.md", "AGENTS.override.md")
 
 
 def сверка_дерева(repo=None):
@@ -1460,6 +1464,16 @@ def selftest():
             tasks, плохие = задачи(root)
             broken, warnings = проверить(tasks, **kw)
             return "\n".join(плохие + broken), "\n".join(warnings)
+
+        # Инструкции Codex живут рядом с задачами, но задачами не являются.
+        # Настоящий файл задачи без frontmatter по-прежнему обязан краснеть.
+        text, _ = свод({"README.md": "# Доска", "AGENTS.md": "# Инструкции",
+                        "AGENTS.override.md": "# Локальные инструкции"})
+        if text:
+            сбои.append("служебные инструкции Codex засчитаны задачами: " + text)
+        text, _ = свод({"0301-bad.md": "# Задача без заголовка"})
+        if "0301-bad.md: нет заголовка" not in text:
+            сбои.append("задача без frontmatter перестала краснеть после исключения инструкций")
 
         # 1. «В работе» без ветки и без PR.
         text, _ = свод({"0301-a.md": файл(id="0301", status="в работе", who="coder")},
