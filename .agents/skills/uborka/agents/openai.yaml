@@ -1,0 +1,6 @@
+interface:
+  display_name: "Уборка деревьев и ветвей"
+  short_description: "Показать и убрать разрешённые рабочие копии"
+  default_prompt: "Используй $uborka для работы по правилам parts-platform."
+policy:
+  allow_implicit_invocation: false

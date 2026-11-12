@@ -1,0 +1,6 @@
+interface:
+  display_name: "Выкладка на стенд"
+  short_description: "Подготовить разрешённую выкладку сборки"
+  default_prompt: "Используй $vykladka для работы по правилам parts-platform."
+policy:
+  allow_implicit_invocation: false

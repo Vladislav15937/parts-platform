@@ -14,7 +14,7 @@
 #   ./tools/clock-shift-run.sh                # +31 день, фронтенд и проверки
 #   ./tools/clock-shift-run.sh --days 400     # и другой год заодно
 #   ./tools/clock-shift-run.sh --java         # и бэкенд, если часы у JVM сдвигаются
-#   ./tools/clock-shift-run.sh --selftest     # сверить шим со статическим сторожом
+#   ./tools/clock-shift-run.sh --selftest     # проверить шим, бюджеты и незавершённые прогоны
 #
 # Задачей CI этот прогон заведён — ЦЕЛИКОМ, вместе с бэкендом: задача
 # «Часы вперёд» в .github/workflows/ci.yml. Это решение владельца продукта
@@ -215,6 +215,7 @@ check_shim() {
 # он оракул, а не мина — момент зашит с обеих сторон и от сегодняшнего числа
 # ответ не зависит вовсе.
 selftest() {
+    python3 tools/clock-shift-selftest.py || return 1
     dir="$(mktemp -d)"
     trap 'rm -rf "$dir"' EXIT
     make_shim "$dir" "$SHIFT_SECONDS"
@@ -353,11 +354,18 @@ skip_why() {
 # обязано отличаться от «прошла». На ubuntu это `timeout`, на macOS —
 # `gtimeout` из coreutils; нет ни того, ни другого — гоняем без предела
 # и говорим об этом.
-LIMIT=""
+timeout_command=""
 for candidate in timeout gtimeout; do
-    command -v "$candidate" > /dev/null 2>&1 && LIMIT="$candidate 180" && break
+    command -v "$candidate" > /dev/null 2>&1 && timeout_command="$candidate" && break
 done
-[ -n "$LIMIT" ] || warn "ни timeout, ни gtimeout — самопроверки идут без предела по времени"
+[ -n "$timeout_command" ] || warn "ни timeout, ни gtimeout — самопроверки идут без предела по времени"
+
+incomplete_selfcheck() {
+    case "$1" in
+        124|125|126|127) return 0 ;;
+        *) [ "$1" -ge 128 ] ;;
+    esac
+}
 
 step "Проверки и сторожа: свои самопроверки со сдвинутыми часами"
 for file in ops/*.sh tools/*.sh tools/*.py db/*.py; do
@@ -374,12 +382,41 @@ for file in ops/*.sh tools/*.sh tools/*.py db/*.py; do
     [ -n "$flag" ] || continue
     [ -x "$file" ] || continue
 
+    # CI 0392: обычная deploy-самопроверка заняла 174–175 с, а сдвинутая
+    # дважды оборвалась на 180 с перед последней парой подделок. Даём обеим
+    # по 360 с — двойной прежний предел; все остальные сохраняют 180 с.
+    budget=180
+    [ "$file" = "ops/deploy.sh" ] && budget=360
+    LIMIT=""
+    limit_text="без предела времени"
+    if [ -n "$timeout_command" ]; then
+        LIMIT="$timeout_command $budget"
+        limit_text="предел $budget с"
+    fi
+    started=$(/bin/date +%s)
     $LIMIT "./$file" "$flag" > "$SHIM/plain.log" 2>&1; plain=$?
+    plain_seconds=$(( $(/bin/date +%s) - started ))
+    started=$(/bin/date +%s)
     PATH="$SHIM:$PATH" $LIMIT "./$file" "$flag" > "$SHIM/shifted.log" 2>&1; shifted=$?
+    shifted_seconds=$(( $(/bin/date +%s) - started ))
+    measured="без сдвига $plain_seconds с, со сдвигом $shifted_seconds с; $limit_text"
+
+    # Два таймаута — два незавершённых прогона, даже если коды совпали.
+    # Их сравнение не доказывает ни совпадения исходов, ни календарной мины.
+    if incomplete_selfcheck "$plain" || incomplete_selfcheck "$shifted"; then
+        warn "  НЕ ПРОВЕРЕНО: $file — самопроверка не завершена (коды $plain/$shifted; $measured)"
+        warn "    124 — таймаут, 125–127 — отказ запуска, от 128 — завершение сигналом. Последние строки:"
+        warn "    Без сдвига:"
+        tail -12 "$SHIM/plain.log" | sed 's/^/      /'
+        warn "    Со сдвигом:"
+        tail -12 "$SHIM/shifted.log" | sed 's/^/      /'
+        UNCHECKED=1
+        continue
+    fi
 
     if [ "$plain" = "$shifted" ]; then
         if [ "$plain" = 0 ]; then
-            green "  ✓ $file — исход тот же"
+            green "  ✓ $file — исход тот же ($measured)"
         else
             warn  "  ~ $file — падает и без сдвига (код $plain), к часам отношения не имеет"
         fi
@@ -474,7 +511,8 @@ else
             tail -25 "$SHIM/back.log" | sed 's/^/      /'
             warn "  Если это отказ выкачки — так и задумано: сеть под сдвинутыми"
             warn "  часами не работает. Прогрейте maven настоящими часами"
-            warn "  и повторите: ./mvnw -B -ntp -DskipTests=true test-compile"
+            warn "  реальным JUnit-тестом: ./mvnw -B -ntp test -Dtest=OemNumbersTest"
+            warn "  Затем повторите сдвинутый прогон. test-compile не загружает provider."
             UNCHECKED=1
         fi
     fi

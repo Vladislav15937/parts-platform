@@ -1,0 +1,6 @@
+interface:
+  display_name: "Цикл задачи"
+  short_description: "Выполнить задачу по договору проекта"
+  default_prompt: "Используй $tsikl-zadachi для работы по правилам parts-platform."
+policy:
+  allow_implicit_invocation: true
