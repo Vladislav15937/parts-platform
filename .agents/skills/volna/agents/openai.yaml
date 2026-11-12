@@ -1,0 +1,6 @@
+interface:
+  display_name: "Приземление волны"
+  short_description: "Свести разрешённую волну с проверкой SHA"
+  default_prompt: "Используй $volna для работы по правилам parts-platform."
+policy:
+  allow_implicit_invocation: true

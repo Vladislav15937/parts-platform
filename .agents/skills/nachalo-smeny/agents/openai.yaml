@@ -1,0 +1,6 @@
+interface:
+  display_name: "Начало смены"
+  short_description: "Проверить CI, голову main и доску заново"
+  default_prompt: "Используй $nachalo-smeny для работы по правилам parts-platform."
+policy:
+  allow_implicit_invocation: true

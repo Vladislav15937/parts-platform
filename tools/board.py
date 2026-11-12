@@ -7,7 +7,8 @@
     ./tools/board.py --свободные  что можно раздавать прямо сейчас
     ./tools/board.py --selftest   прогнать сторожа по подделкам и выйти
 
-Читает `tasks/*.md`. Одна задача — один файл: пять агентов, правящих общий
+Читает `tasks/*.md`, кроме README.md и инструкций AGENTS.md/AGENTS.override.md.
+Одна задача — один файл: пять агентов, правящих общий
 список параллельно, дерутся на слиянии, а свой файл каждый трогает один.
 
 Отдельно проверяет то, из-за чего доска начинает врать. Проверок было пять,
@@ -339,7 +340,7 @@ def read(path):
 def задачи(tasks_dir):
     tasks, broken = [], []
     for name in sorted(os.listdir(tasks_dir)):
-        if not name.endswith(".md") or name == "README.md":
+        if not name.endswith(".md") or name in ("README.md", "AGENTS.md", "AGENTS.override.md"):
             continue
         t = read(os.path.join(tasks_dir, name))
         if t is None:
@@ -1460,6 +1461,16 @@ def selftest():
             tasks, плохие = задачи(root)
             broken, warnings = проверить(tasks, **kw)
             return "\n".join(плохие + broken), "\n".join(warnings)
+
+        # Инструкции Codex живут рядом с задачами, но задачами не являются.
+        # Настоящий файл задачи без frontmatter по-прежнему обязан краснеть.
+        text, _ = свод({"README.md": "# Доска", "AGENTS.md": "# Инструкции",
+                        "AGENTS.override.md": "# Локальные инструкции"})
+        if text:
+            сбои.append("служебные инструкции Codex засчитаны задачами: " + text)
+        text, _ = свод({"0301-bad.md": "# Задача без заголовка"})
+        if "0301-bad.md: нет заголовка" not in text:
+            сбои.append("задача без frontmatter перестала краснеть после исключения инструкций")
 
         # 1. «В работе» без ветки и без PR.
         text, _ = свод({"0301-a.md": файл(id="0301", status="в работе", who="coder")},
