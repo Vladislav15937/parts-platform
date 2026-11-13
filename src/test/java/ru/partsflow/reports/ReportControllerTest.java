@@ -186,8 +186,8 @@ class ReportControllerTest extends PostgresTestBase {
             Long brandId = jdbc.queryForObject(
                     "SELECT id FROM catalog.brand ORDER BY id LIMIT 1", Long.class);
             Long id = jdbc.queryForObject("""
-                    INSERT INTO donor (public_code, vin, brand_id, year)
-                    VALUES ('D-1', 'VIN1', ?, 2006) RETURNING id""", Long.class, brandId);
+                    INSERT INTO donor (public_code, vin, brand_id, year, number)
+                    VALUES ('D-1', 'VIN1', ?, 2006, 7001) RETURNING id""", Long.class, brandId);
             jdbc.update("""
                     INSERT INTO donor_cost (donor_id, cost_type, amount)
                     VALUES (?, 'PURCHASE', 30000)""", id);
@@ -200,15 +200,15 @@ class ReportControllerTest extends PostgresTestBase {
 
         mvc.perform(get("/api/reports/donors").session(login("vladelec")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rows[?(@.publicCode == 'D-1')].totalCost")
+                .andExpect(jsonPath("$.rows[?(@.number == 7001)].totalCost")
                         .value(org.hamcrest.Matchers.contains(30000.00)))
-                .andExpect(jsonPath("$.rows[?(@.publicCode == 'D-1')].revenue")
+                .andExpect(jsonPath("$.rows[?(@.number == 7001)].revenue")
                         .value(org.hamcrest.Matchers.contains(5000.00)))
-                .andExpect(jsonPath("$.rows[?(@.publicCode == 'D-1')].partsSold")
+                .andExpect(jsonPath("$.rows[?(@.number == 7001)].partsSold")
                         .value(org.hamcrest.Matchers.contains(1)))
                 // Без остатка на складе свежая машина неотличима от убыточной:
                 // вложили 30 000, выручили 5 000 — и ещё 5 000 лежит на полке.
-                .andExpect(jsonPath("$.rows[?(@.publicCode == 'D-1')].stockValue")
+                .andExpect(jsonPath("$.rows[?(@.number == 7001)].stockValue")
                         .value(org.hamcrest.Matchers.contains(5000.00)))
                 .andExpect(jsonPath("$.totals.donors").value(1));
 

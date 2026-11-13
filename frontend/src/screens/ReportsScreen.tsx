@@ -698,13 +698,13 @@ export function ReportsScreen({ canRead }: Props) {
               {donors.rows.map((row) => (
                 <tr key={row.donorId}>
                   <td>
-                    {/* Сначала то, чем машину зовёт владелец: марка с моделью
-                        или номер из предыдущей системы. Наш внутренний код
-                        ему ничего не говорит — прогон на чистой ячейке
-                        показал таблицу из одних шестнадцатеричных кодов. */}
-                    <strong>{row.note ?? row.legacyCode ?? row.publicCode ?? row.donorId}</strong>
+                    {/* Сначала то, чем машину зовёт владелец: заметка или номер
+                        донора. Шестнадцатеричного кода здесь нет вовсе
+                        (задача 0364): у каждой машины есть номер. */}
+                    <strong>{row.note ?? `№${row.number}`}</strong>
                     {row.year !== null && <span className="muted"> · {row.year}</span>}
-                    {row.legacyCode !== null && row.note !== null && (
+                    {row.note !== null && <span className="muted"> · №{row.number}</span>}
+                    {row.legacyCode !== null && row.legacyCode !== String(row.number) && (
                       <span className="muted"> · {row.legacyCode}</span>
                     )}
                     {row.vin !== null && <div className="muted">{row.vin}</div>}

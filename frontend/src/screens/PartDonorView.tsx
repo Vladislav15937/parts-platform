@@ -58,18 +58,23 @@ export function PartDonorView({ donor, onParts }: {
  */
 export function donorRows(donor: PartDonor): Array<[string, string]> {
   const rows: Array<[string, string]> = [];
-  const add = (label: string, value: string | number | null) => {
-    if (value !== null && String(value).trim() !== '') {
+  const add = (label: string, value: string | number | null | undefined) => {
+    if (value !== null && value !== undefined && String(value).trim() !== '') {
       rows.push([label, String(value)]);
     }
   };
 
-  add('Номер машины', donor.code);
-  add('Состояние', donor.status);
+  // Слова строк — с формы «Создание донора» ориентира (задача 0364).
+  add('Номер донора', donor.code);
   add('Поставка', donor.supply);
+  add('Статус', donor.statusName);
+  // Стадия разбора — наша, у ориентира её нет: на ней держится справочник
+  // приёмки (в разборе и разобранные), и статус клиента её не заменяет.
+  add('Состояние', donor.status);
   add('Марка', donor.brand);
   add('Модель', donor.model);
   add('Поколение', donor.generation);
+  add('Рестайлинг', donor.restyling);
   add('Кузов', donor.bodyCode);
   add('Двигатель', donor.engineCode);
   add('Год выпуска', donor.year);
@@ -81,7 +86,9 @@ export function donorRows(donor: PartDonor): Array<[string, string]> {
   // Пробег с разделителями разрядов: «158475» глазами не читается.
   add('Пробег, км', donor.mileageKm === null ? null : donor.mileageKm.toLocaleString('ru-RU'));
   add('VIN', donor.vin);
+  add('Ссылка на видео', donor.videoUrl);
   add('Где стоит', donor.location);
-  add('Примечание', donor.note);
+  add('Описание (для клиента)', donor.clientDescription);
+  add('Заметка (для вас)', donor.note);
   return rows;
 }

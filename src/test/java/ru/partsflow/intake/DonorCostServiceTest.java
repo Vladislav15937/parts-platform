@@ -174,9 +174,12 @@ class DonorCostServiceTest extends PostgresTestBase {
     @DisplayName("Список машин показывает и купленную, не поставленную в разбор")
     void directoryListsPurchasedDonors() {
         var all = inTenant(() -> directory.all());
+        // Машина зовётся номером донора (задача 0364), а не публичным кодом.
+        String number = inTenant(() -> jdbc.queryForObject(
+                "SELECT number::text FROM donor WHERE public_code = 'ТЕСТ-1'", String.class));
 
         assertThat(all).singleElement().satisfies(entry -> {
-            assertThat(entry.code()).isEqualTo("ТЕСТ-1");
+            assertThat(entry.code()).isEqualTo(number);
             assertThat(entry.status()).isEqualTo("PURCHASED");
             assertThat(entry.note()).isEqualTo("Камри");
         });
@@ -191,7 +194,7 @@ class DonorCostServiceTest extends PostgresTestBase {
     @DisplayName("Список машин называет машину номером клиента, а не нашим")
     void directoryPrefersLegacyCode() {
         inTenant(() -> jdbc.update(
-                "UPDATE donor SET legacy_code = '350' WHERE public_code = 'ТЕСТ-1'"));
+                "UPDATE donor SET legacy_code = '350', number = 350 WHERE public_code = 'ТЕСТ-1'"));
 
         assertThat(inTenant(() -> directory.all()))
                 .singleElement()
@@ -220,7 +223,7 @@ class DonorCostServiceTest extends PostgresTestBase {
             Long other = jdbc.queryForObject("""
                     INSERT INTO supply (kind, number) VALUES ('CONTAINER', '19')
                     RETURNING id""", Long.class);
-            jdbc.update("UPDATE donor SET legacy_code = '350', supply_id = ? WHERE id = ?",
+            jdbc.update("UPDATE donor SET legacy_code = '350', number = 350, supply_id = ? WHERE id = ?",
                     ours, donorId);
             jdbc.update("""
                     INSERT INTO donor (public_code, brand_id, supply_id)

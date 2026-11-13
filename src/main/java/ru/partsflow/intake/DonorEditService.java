@@ -31,15 +31,20 @@ public class DonorEditService {
     private final DonorDirectory directory;
     private final DonorVehicleResolver vehicles;
     private final DonorRetitle retitles;
+    private final DonorNumbers numbers;
+    private final DonorStatusService statuses;
 
     public DonorEditService(DonorRepository donors, SupplyRepository supplies,
                             DonorDirectory directory, DonorVehicleResolver vehicles,
-                            DonorRetitle retitles) {
+                            DonorRetitle retitles, DonorNumbers numbers,
+                            DonorStatusService statuses) {
         this.donors = donors;
         this.supplies = supplies;
         this.directory = directory;
         this.vehicles = vehicles;
         this.retitles = retitles;
+        this.numbers = numbers;
+        this.statuses = statuses;
     }
 
     /**
@@ -119,6 +124,15 @@ public class DonorEditService {
         }
         donor.arrivedWith(change.supplyId());
         donor.setNote(text(change.note()));
+        // Номер правится, но не стирается: пустой в запросе — «не трогали»
+        // (у машины без номера в складе не найти ни одной детали).
+        if (change.number() != null && !change.number().equals(donor.getNumber())) {
+            donor.setNumber(numbers.assign(change.number(), donorId));
+        }
+        donor.setRestyling(text(change.restyling()));
+        donor.setClientDescription(text(change.clientDescription()));
+        donor.setVideoUrl(videoUrl(change.videoUrl()));
+        donor.setStatusId(statusOf(change.statusId()));
         // Пересборка читает машину из базы, а не из сущности — сначала записать.
         donors.saveAndFlush(donor);
         int renamed = before == null ? 0 : retitles.retitle(before, authorId);
@@ -127,17 +141,63 @@ public class DonorEditService {
     }
 
     /**
-     * Руль, коробка и привод — коды со словами для выбора на форме.
+     * Руль, коробка, привод и статус — коды со словами для выбора на форме.
      *
      * <p>Слова — общим словарём {@link ValueWords}, а не копией на экране:
      * копий слов-значений было пять, и они разошлись (разбор PR 510).
-     * Порядок — порядок перечисления.
+     * Порядок — порядок перечисления. Статусы — список клиента
+     * ({@code donor_status}), кодом служит номер строки: на экране его
+     * не показывают, он уезжает обратно в {@code statusId}.
      */
-    public static Vocabulary vocabulary() {
+    @Transactional(readOnly = true)
+    public Vocabulary vocabulary() {
         return new Vocabulary(
                 options(Donor.Steering.values(), ValueWords::steering),
                 options(Donor.TransmissionType.values(), ValueWords::transmission),
-                options(Donor.DriveType.values(), ValueWords::drive));
+                options(Donor.DriveType.values(), ValueWords::drive),
+                statuses.list().stream()
+                        .map(status -> new Option(String.valueOf(status.id()), status.name()))
+                        .toList());
+    }
+
+    /** Номер, который форма заведения подставит («Номер донора — 512»). */
+    @Transactional(readOnly = true)
+    public long nextNumber() {
+        return numbers.peek();
+    }
+
+    /** Статус из списка клиента; несуществующий — 400 словами, а не отказ внешнего ключа. */
+    Long statusOf(Long statusId) {
+        if (statusId != null) {
+            statuses.require(statusId);
+        }
+        return statusId;
+    }
+
+    /** Длиннее адреса браузеры не открывают. */
+    static final int VIDEO_URL_LIMIT = 2000;
+
+    private static final java.util.regex.Pattern LINK =
+            java.util.regex.Pattern.compile("(?i)(https?://)?[^\\s/]+\\.[^\\s]+");
+
+    /**
+     * Ссылка на видео: пусто — «нет»; иначе то, что похоже на адрес.
+     *
+     * <p>Проверяется форма, а не доступность: ходить на чужой сайт при
+     * сохранении машины значило бы зависеть от него. Пробел внутри или
+     * отсутствие точки — почти наверняка вставили не то (описание вместо
+     * ссылки), и это 400 словами, а не молча сохранённый мусор.
+     */
+    static String videoUrl(String value) {
+        String link = text(value);
+        if (link == null) {
+            return null;
+        }
+        if (link.length() > VIDEO_URL_LIMIT || !LINK.matcher(link).matches()) {
+            throw new IllegalArgumentException(
+                    "Ссылка на видео не похожа на адрес — вставьте ссылку целиком, например https://youtu.be/…");
+        }
+        return link;
     }
 
     private static List<Option> options(Enum<?>[] values, Function<String, String> word) {
@@ -151,7 +211,7 @@ public class DonorEditService {
     }
 
     /** Пустое и пробелы — «не заполнено», а не значение. */
-    private static String text(String value) {
+    static String text(String value) {
         return value == null || value.isBlank() ? null : value.strip();
     }
 
@@ -168,7 +228,9 @@ public class DonorEditService {
                               String transmissionModel, Donor.DriveType driveType,
                               String color, String equipmentCode, String vin,
                               @jakarta.validation.constraints.PositiveOrZero Integer mileageKm,
-                              Long supplyId, String note) {
+                              Long supplyId, String note,
+                              Long number, String restyling, String clientDescription,
+                              String videoUrl, Long statusId) {
 
         static DonorFields of(Donor donor) {
             return new DonorFields(donor.getBrandId(), donor.getModelId(),
@@ -176,7 +238,9 @@ public class DonorEditService {
                     donor.getEngineCode(), donor.getSteering(), donor.getTransmissionType(),
                     donor.getTransmissionModel(), donor.getDriveType(), donor.getColor(),
                     donor.getEquipmentCode(), donor.getVin(), donor.getMileageKm(),
-                    donor.getSupplyId(), donor.getNote());
+                    donor.getSupplyId(), donor.getNote(), donor.getNumber(),
+                    donor.getRestyling(), donor.getClientDescription(), donor.getVideoUrl(),
+                    donor.getStatusId());
         }
     }
 
@@ -196,6 +260,6 @@ public class DonorEditService {
     }
 
     public record Vocabulary(List<Option> steering, List<Option> transmission,
-                             List<Option> drive) {
+                             List<Option> drive, List<Option> statuses) {
     }
 }

@@ -99,6 +99,8 @@ public class OrganizationAuditService {
         KINDS.put("company_setting", "Настройки компании");
         // Задача 0044: роли клиента правит экран сотрудников через AuditJournal.
         KINDS.put("access_role", "Роль");
+        // Задача 0364: список статусов машины ведёт клиент в «Настройках».
+        KINDS.put("donor_status", "Статус машины");
     }
 
     /**
@@ -131,7 +133,8 @@ public class OrganizationAuditService {
             Map.entry("storage_cell", "Ячейка заведена"),
             Map.entry("tenant_member", "Сотрудник заведён"),
             Map.entry("company_setting", "Настройки заведены"),
-            Map.entry("access_role", "Роль заведена"));
+            Map.entry("access_role", "Роль заведена"),
+            Map.entry("donor_status", "Статус машины заведён"));
 
     private static final Map<String, String> REMOVED = Map.ofEntries(
             Map.entry("part", "Товар удалён"),
@@ -154,7 +157,8 @@ public class OrganizationAuditService {
             Map.entry("storage_cell", "Ячейка удалена"),
             Map.entry("tenant_member", "Сотрудник удалён"),
             Map.entry("company_setting", "Настройки удалены"),
-            Map.entry("access_role", "Роль удалена"));
+            Map.entry("access_role", "Роль удалена"),
+            Map.entry("donor_status", "Статус машины удалён"));
 
     /**
      * Название вещи у видов задачи 0325 — из её строки, а у позиции снимка
@@ -169,7 +173,7 @@ public class OrganizationAuditService {
             "part", "deal", "deal_item", "payment", "donor_cost");
 
     static final String OTHER_SUBJECT ="CASE a.table_name"
-            + " WHEN 'donor' THEN (SELECT coalesce(x.legacy_code, x.public_code) FROM donor x"
+            + " WHEN 'donor' THEN (SELECT x.number::text FROM donor x"
             + " WHERE x.id = a.record_id)"
             + " WHEN 'supply' THEN (SELECT " + ru.partsflow.shared.SupplyKinds.sqlLabel("x")
             + " FROM supply x WHERE x.id = a.record_id)"
@@ -178,7 +182,7 @@ public class OrganizationAuditService {
             + " WHERE x.id = (coalesce(a.new_value, a.old_value) ->> 'part_id')::bigint)"
             + " WHEN 'part_applicability' THEN (SELECT x.title FROM part x"
             + " WHERE x.id = (coalesce(a.new_value, a.old_value) ->> 'part_id')::bigint)"
-            + " WHEN 'donor_photo' THEN (SELECT coalesce(x.legacy_code, x.public_code) FROM donor x"
+            + " WHEN 'donor_photo' THEN (SELECT x.number::text FROM donor x"
             + " WHERE x.id = (coalesce(a.new_value, a.old_value) ->> 'donor_id')::bigint)"
             + " WHEN 'customer' THEN coalesce((SELECT x.name FROM customer x WHERE x.id = a.record_id),"
             + " coalesce(a.new_value, a.old_value) ->> 'name')"
@@ -193,6 +197,8 @@ public class OrganizationAuditService {
             + " WHEN 'tenant_member' THEN (SELECT " + MemberSignature.sql("x")
             + " FROM tenant_member x WHERE x.id = a.record_id)"
             + " WHEN 'access_role' THEN coalesce((SELECT x.name FROM access_role x WHERE x.id = a.record_id),"
+            + " coalesce(a.new_value, a.old_value) ->> 'name')"
+            + " WHEN 'donor_status' THEN coalesce((SELECT x.name FROM donor_status x WHERE x.id = a.record_id),"
             + " coalesce(a.new_value, a.old_value) ->> 'name')"
             + " END";
 
@@ -215,7 +221,7 @@ public class OrganizationAuditService {
      */
     private static final String SEARCHABLE = "concat_ws(' ', p.title, p.public_code,"
             + " dip.title, dip.public_code, d.number::text, paid.number::text,"
-            + " coalesce(dcd.legacy_code, dcd.public_code), cust.name, ma.title, "
+            + " dcd.number::text, cust.name, ma.title, "
             + OTHER_SEARCHABLE + ")";
 
     /**
@@ -398,16 +404,18 @@ public class OrganizationAuditService {
                 // решение владельца 10 октября 2026): иначе «347» находил бы
                 // сделку 1347, а публичный код чужой записи — по случайным
                 // цифрам.
+                // Номер донора у затраты по машине — тоже номер (задача 0364):
+                // внутреннего public_code машины владелец не видит нигде,
+                // и искать по нему некому.
                 where.append(" OR p.number = ? OR dip.number = ?"
-                        + " OR d.number = ? OR paid.number = ?");
+                        + " OR d.number = ? OR paid.number = ? OR dcd.number = ?");
+                args.add(number);
                 args.add(number);
                 args.add(number);
                 args.add(number);
                 args.add(number);
                 String code = PartNumberQuery.publicCodeArg(query, true);
-                where.append(" OR p.public_code = ? OR dip.public_code = ?"
-                        + " OR dcd.public_code = ?");
-                args.add(code);
+                where.append(" OR p.public_code = ? OR dip.public_code = ?");
                 args.add(code);
                 args.add(code);
             }
@@ -477,7 +485,7 @@ public class OrganizationAuditService {
                         + conditionAt("di.part_id", "dip.condition") + " END AS item_condition,"
                         + " idl.number AS item_deal_number,"
                         + " paid.number AS payment_deal_number,"
-                        + " coalesce(dcd.legacy_code, dcd.public_code) AS cost_donor,"
+                        + " dcd.number::text AS cost_donor,"
                         + " ma.title AS feed_title,"
                         + " a.new_value ->> 'packet_id' AS created_packet,"
                         + " coalesce(a.new_value, a.old_value) ->> 'vehicle' AS event_detail,"

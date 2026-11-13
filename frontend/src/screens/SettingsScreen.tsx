@@ -21,9 +21,10 @@ import {
   MIN_RESERVATION_DAYS,
 } from '../settings/company';
 import { useMounted } from '../ui/useMounted';
+import { DonorStatusesPanel } from './DonorStatusesPanel';
 import { PrintFormsPanel } from './PrintFormsPanel';
 
-type Section = 'payment' | 'deal' | 'reservation' | 'print';
+type Section = 'payment' | 'deal' | 'reservation' | 'print' | 'donorStatus';
 
 /**
  * Настройки — экран владельца.
@@ -76,12 +77,20 @@ export function SettingsScreen() {
           >
             Печатные формы
           </button>
+          <button
+            type="button"
+            className={section === 'donorStatus' ? 'tab tab--active' : 'tab'}
+            onClick={() => setSection('donorStatus')}
+          >
+            Статусы машин
+          </button>
         </nav>
         <div className="settings-content">
           {section === 'payment' && <PaymentSourcesPanel />}
           {section === 'deal' && <DealSourcesPanel />}
           {section === 'reservation' && <ReservationTermPanel />}
           {section === 'print' && <PrintFormsPanel />}
+          {section === 'donorStatus' && <DonorStatusesPanel />}
         </div>
       </div>
     </section>

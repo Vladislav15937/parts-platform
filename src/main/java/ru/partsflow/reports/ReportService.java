@@ -240,15 +240,16 @@ public class ReportService {
     @Transactional(readOnly = true)
     public List<DonorRow> donorProfitability(int limit) {
         return jdbc.query("""
-                SELECT donor_id, public_code, legacy_code, note, vin, year,
-                       total_cost, revenue, profit,
-                       parts_total, parts_sold, stock_value
-                  FROM v_donor_profitability
-                 ORDER BY profit, donor_id
+                SELECT v.donor_id, d.number, v.legacy_code, v.note, v.vin, v.year,
+                       v.total_cost, v.revenue, v.profit,
+                       v.parts_total, v.parts_sold, v.stock_value
+                  FROM v_donor_profitability v
+                  JOIN donor d ON d.id = v.donor_id
+                 ORDER BY v.profit, v.donor_id
                  LIMIT ?""",
                 (rs, i) -> new DonorRow(
                         rs.getLong("donor_id"),
-                        rs.getString("public_code"),
+                        rs.getLong("number"),
                         rs.getString("legacy_code"),
                         rs.getString("note"),
                         rs.getString("vin"),
@@ -527,7 +528,11 @@ public class ReportService {
      * @param stockValue во сколько оценено то, что с машины ещё не продано:
      *                   без него свежий донор неотличим от убыточного
      */
-    public record DonorRow(Long donorId, String publicCode, String legacyCode, String note,
+    /**
+     * @param number номер донора — им машину зовут на экранах (задача 0364);
+     *               внутренний {@code public_code} строка больше не несёт
+     */
+    public record DonorRow(Long donorId, Long number, String legacyCode, String note,
                            String vin, Integer year,
                            BigDecimal totalCost, BigDecimal revenue, BigDecimal profit,
                            int partsTotal, int partsSold, BigDecimal stockValue) {

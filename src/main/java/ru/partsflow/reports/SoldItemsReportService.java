@@ -151,7 +151,7 @@ public class SoldItemsReportService {
                         + "       " + UNIT_PROFIT + " AS unit_profit,\n"
                         + "       w.name AS warehouse, " + MemberSignature.sql("tm") + " AS manager,\n"
                         + "       s.number AS supply_number,\n"
-                        + "       COALESCE(d.legacy_code, d.public_code) AS donor_code\n"
+                        + "       d.number::text AS donor_code\n"
                         + FROM + "\n"
                         + SOLD + where + cursor + "\n"
                         + " ORDER BY dl.closed_at DESC, di.id DESC\n"
@@ -251,7 +251,7 @@ public class SoldItemsReportService {
                 + "       " + UNIT_PROFIT + " AS unit_profit,\n"
                 + "       w.name AS warehouse, " + MemberSignature.sql("tm") + " AS manager,\n"
                 + "       s.number AS supply_number,\n"
-                + "       COALESCE(d.legacy_code, d.public_code) AS donor_code\n"
+                + "       d.number::text AS donor_code\n"
                 + FROM + "\n"
                 + SOLD + where + "\n"
                 + " ORDER BY dl.closed_at DESC, di.id DESC";

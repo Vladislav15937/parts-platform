@@ -88,9 +88,9 @@ class PartDonorHttpTest extends PostgresTestBase {
                     INSERT INTO donor (brand_id, year, status, steering, drive_type,
                                        transmission_type, transmission_model, color, color_code,
                                        equipment_code, mileage_km, body_code, engine_code,
-                                       legacy_code, supply_id)
+                                       legacy_code, number, supply_id)
                     VALUES (?, 2000, 'DISMANTLING', 'RIGHT', 'FWD', 'AT', 'A244L-01A',
-                            'Белый', '040', '0128644', 85364, 'EXZ10', '5EFE', 'Д-395', ?)
+                            'Белый', '040', '0128644', 85364, 'EXZ10', '5EFE', 'Д-395', 395, ?)
                     RETURNING id""", Long.class, brand, supply);
 
             withDonor = part("Колонка рулевая", donor);
@@ -106,8 +106,8 @@ class PartDonorHttpTest extends PostgresTestBase {
     void donorIsServedInWords() throws Exception {
         mvc.perform(get("/api/parts/%d/donor".formatted(withDonor)).session(login()))
                 .andExpect(status().isOk())
-                // Номер, которым машину зовёт клиент, а не наш внутренний код.
-                .andExpect(jsonPath("$.code").value("Д-395"))
+                // Номер донора (задача 0364), а не наш внутренний код.
+                .andExpect(jsonPath("$.code").value("395"))
                 .andExpect(jsonPath("$.status").value("В разборе"))
                 // Поставка тоже словами: рядом руль и коробка разложены
                 // по-русски, а она уходила как «CONTAINER №16» — внутреннее

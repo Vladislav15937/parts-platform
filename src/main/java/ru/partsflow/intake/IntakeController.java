@@ -153,6 +153,16 @@ public class IntakeController {
     @PostMapping("/donors")
     @PreAuthorize("hasAuthority('intake.receive')")
     public ResponseEntity<DonorView> registerDonor(@Valid @RequestBody DonorRequest request) {
+        // «Стоимость» — запись в журнал затрат, а его ведёт право «Записывать
+        // затраты по машине»; заводить машину может и тот, у кого его нет.
+        // Без этой проверки форма стала бы вторым входом в журнал затрат
+        // мимо права, которым закрыт первый (POST /donors/{id}/costs).
+        if (request.cost() != null
+                && !CurrentUser.require().can(ru.partsflow.platform.security.Permission.DONOR_COSTS)) {
+            throw new ru.partsflow.platform.security.RightsRefusal(
+                    "Стоимость машины записывается в её затраты, а записывать затраты"
+                            + " у вас нет права — оставьте «Стоимость» пустой");
+        }
         Donor donor = new Donor(request.brandId());
         donor.setModelId(request.modelId());
         donor.setGenerationId(request.generationId());
@@ -170,8 +180,14 @@ public class IntakeController {
         donor.setTransmissionModel(request.transmissionModel());
         donor.setEquipmentCode(request.equipmentCode());
         donor.setNote(request.note());
+        donor.setNumber(request.number());
+        donor.setRestyling(request.restyling());
+        donor.setClientDescription(request.clientDescription());
+        donor.setVideoUrl(request.videoUrl());
+        donor.setStatusId(request.statusId());
 
-        Donor saved = intake.registerDonor(donor, request.supplyId(), CurrentUser.memberId());
+        Donor saved = intake.registerDonor(donor, request.supplyId(), request.cost(),
+                CurrentUser.memberId());
         return ResponseEntity.status(HttpStatus.CREATED).body(DonorView.of(saved));
     }
 
@@ -345,7 +361,17 @@ public class IntakeController {
                                   поле молча отбрасывалось, и позиции наследовали пустоту. */
                                String equipmentCode,
                                String note,
-                               Long supplyId) {
+                               Long supplyId,
+                               /* Задача 0364: пусто — сервер выдаёт следующий
+                                  за наибольшим; вписанный — если свободен. */
+                               Long number,
+                               String restyling,
+                               String clientDescription,
+                               String videoUrl,
+                               Long statusId,
+                               /* «Стоимость» формы: закупка в журнал затрат машины
+                                  (ответ владельца 31.10.2026, задача 0364). Пусто — нет. */
+                               BigDecimal cost) {
     }
 
     public record ReceiptRequest(
@@ -424,11 +450,16 @@ public class IntakeController {
         }
     }
 
-    public record DonorView(Long id, String publicCode, Donor.DonorStatus status,
+    /**
+     * @param number номер донора — им машину зовут на экранах; внутренний
+     *               {@code public_code} наружу не отдаётся (задача 0364, п. 6):
+     *               «Машина заведена: 7584A8FEAE3D» владелец прочитать не мог
+     */
+    public record DonorView(Long id, Long number, Donor.DonorStatus status,
                             String location, Long supplyId) {
 
         static DonorView of(Donor donor) {
-            return new DonorView(donor.getId(), donor.getPublicCode(), donor.getStatus(),
+            return new DonorView(donor.getId(), donor.getNumber(), donor.getStatus(),
                     donor.getLocation(), donor.getSupplyId());
         }
     }

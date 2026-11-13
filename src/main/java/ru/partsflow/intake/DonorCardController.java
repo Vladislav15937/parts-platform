@@ -45,6 +45,21 @@ public class DonorCardController {
     /** Руль, КПП и привод словами для выбора на форме машины. */
     @GetMapping("/donor-vocabulary")
     public DonorEditService.Vocabulary vocabulary() {
-        return DonorEditService.vocabulary();
+        return edits.vocabulary();
+    }
+
+    /**
+     * Номер, который форма «Создание донора» подставит, — наибольший плюс
+     * один (вписанные руками и пришедшие переносом последовательность
+     * не двигают). Под тем же правом, что заведение: подставлять номер
+     * тому, кто машину не заведёт, незачем.
+     */
+    @GetMapping("/donors/next-number")
+    @PreAuthorize("hasAuthority('intake.receive')")
+    public NextNumber nextNumber() {
+        return new NextNumber(edits.nextNumber());
+    }
+
+    public record NextNumber(long number) {
     }
 }

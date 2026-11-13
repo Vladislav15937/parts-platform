@@ -32,6 +32,9 @@ describe('где стоит машина', () => {
       if (url.includes('/api/catalog/vehicles')) {
         return json({ brands: [], models: [], generations: [] });
       }
+      if (url.includes('/api/intake/donors/next-number')) {
+        return json({ number: 352 });
+      }
       if (url.includes('/api/intake/donors')) {
         listed += 1;
         return json([

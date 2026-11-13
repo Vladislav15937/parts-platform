@@ -45,6 +45,15 @@ public class Donor {
     @Column(name = "public_code", insertable = false, updatable = false)
     private String publicCode;
 
+    /**
+     * Номер донора — им машину зовут на экранах вместо {@code public_code}
+     * (tenant/108, задача 0364). Назначает его {@link DonorNumbers} при
+     * заведении: вписанный человеком — если свободен, иначе следующий
+     * за наибольшим. Умолчание колонки (последовательность) остаётся для
+     * прежнего образа, который номера не знает.
+     */
+    private Long number;
+
     private String vin;
 
     @Column(name = "brand_id", nullable = false)
@@ -130,6 +139,24 @@ public class Donor {
     private Long branchId;
 
     private String note;
+
+    /** Рестайлинг словами, как у Bazon рядом с поколением (tenant/109). */
+    private String restyling;
+
+    /** «Описание (для клиента)» — в отличие от {@link #note}, «Заметки (для вас)». */
+    @Column(name = "client_description")
+    private String clientDescription;
+
+    @Column(name = "video_url")
+    private String videoUrl;
+
+    /**
+     * Статус из списка клиента ({@code donor_status}, tenant/110). Не путать
+     * с {@link #status}: тот — состояние приёмки, по нему решают, можно ли
+     * снимать детали.
+     */
+    @Column(name = "status_id")
+    private Long statusId;
 
     @Column(name = "created_by")
     private Long createdBy;
@@ -393,6 +420,46 @@ public class Donor {
 
     public void setNote(String note) {
         this.note = note;
+    }
+
+    public Long getNumber() {
+        return number;
+    }
+
+    public void setNumber(Long number) {
+        this.number = number;
+    }
+
+    public String getRestyling() {
+        return restyling;
+    }
+
+    public void setRestyling(String restyling) {
+        this.restyling = restyling;
+    }
+
+    public String getClientDescription() {
+        return clientDescription;
+    }
+
+    public void setClientDescription(String clientDescription) {
+        this.clientDescription = clientDescription;
+    }
+
+    public String getVideoUrl() {
+        return videoUrl;
+    }
+
+    public void setVideoUrl(String videoUrl) {
+        this.videoUrl = videoUrl;
+    }
+
+    public Long getStatusId() {
+        return statusId;
+    }
+
+    public void setStatusId(Long statusId) {
+        this.statusId = statusId;
     }
 
     public Long getCreatedBy() {
